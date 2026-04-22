@@ -10,17 +10,12 @@ Works with Go today. npm and pip are next in line.
 
 ## Show me
 
-Terminal 1 — start the check server:
-```bash
-soa serve
-```
-
-Terminal 2 — prefix any command with `soa`:
+Prefix any command with `soa`:
 ```bash
 soa make build
 ```
 
-That's it. `soa` doesn't care what you run — it sets up a local proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
+That's it. `soa` sets up a proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
 
 ```
 [soa] ⠋ scanning github.com/gin-gonic/gin@v1.9.1
@@ -38,6 +33,16 @@ soa go test ./...
 soa gogo build          # custom alias? no problem
 soa ./scripts/deps.sh   # anything that pulls packages
 ```
+
+### Running the check server
+
+`soa` sends checks to whatever `check_url` points to in your config. A reference implementation ships with the binary:
+
+```bash
+soa serve
+```
+
+This starts a check server that blocks packages published less than 7 days ago. Point `check_url` at any endpoint that speaks the [check API](pkg/checkapi/checkapi.go) — your own, a shared team server, a cloud service.
 
 ## Get it
 
@@ -106,7 +111,7 @@ All packages are blocked. soa fails closed — no free passes.
 Only `.zip` downloads go through the check. Metadata (`.info`, `.mod`) flows straight through. If the package is in the approved cache, the check is instant.
 
 **Can I use my own check server?**
-Yes. Point `check_url` to any server that speaks the [check API](pkg/checkapi/checkapi.go). The built-in `soa serve` is just a reference implementation.
+Yes. `soa` talks to whatever `check_url` points to. The built-in `soa serve` is just a reference implementation — swap it for anything that speaks the [check API](pkg/checkapi/checkapi.go).
 
 **What's "soa" mean?**
 It's Malagasy. Look it up. 🇲🇬
