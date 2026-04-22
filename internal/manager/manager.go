@@ -12,6 +12,15 @@ func (p PackageRequest) NeedsCheck() bool {
 	return p.Type == "zip"
 }
 
+// ProxyEntry represents one entry in a GOPROXY chain.
+type ProxyEntry struct {
+	URL                string
+	FallbackOnNotFound bool // comma separator: try next on 404/410
+	FallbackOnError    bool // pipe separator: try next on any error
+	IsDirect           bool // "direct" keyword
+	IsOff              bool // "off" keyword
+}
+
 type Manager interface {
 	Name() string
 	Detect(env []string) (upstream string, active bool)

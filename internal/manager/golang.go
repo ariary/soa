@@ -13,6 +13,9 @@ func (g *GolangManager) Name() string { return "go" }
 func (g *GolangManager) Detect(env []string) (string, bool) {
 	for _, e := range env {
 		if val, ok := strings.CutPrefix(e, "GOPROXY="); ok && val != "" {
+			if val == "off" {
+				return val, false
+			}
 			return val, true
 		}
 	}
@@ -31,7 +34,7 @@ func (g *GolangManager) InjectEnv(env []string, proxyAddr string) []string {
 		}
 	}
 	return append(filtered,
-		"GOPROXY="+proxyAddr,
+		"GOPROXY="+proxyAddr+",direct",
 		"GONOSUMDB=*",
 		"GONOSUMCHECK=*",
 	)
@@ -69,6 +72,51 @@ func (g *GolangManager) Parse(r *http.Request) (PackageRequest, error) {
 
 func (g *GolangManager) UpstreamURL(upstream string, r *http.Request) string {
 	base := strings.Split(upstream, ",")[0]
+	base = strings.Split(base, "|")[0]
 	base = strings.TrimRight(base, "/")
 	return base + r.URL.Path
+}
+
+// ParseUpstreamChain parses a GOPROXY value into a chain of proxy entries.
+func (g *GolangManager) ParseUpstreamChain(goproxy string) []ProxyEntry {
+	if goproxy == "off" {
+		return []ProxyEntry{{IsOff: true}}
+	}
+
+	var entries []ProxyEntry
+	current := ""
+	for i := 0; i < len(goproxy); i++ {
+		ch := goproxy[i]
+		if ch == ',' || ch == '|' {
+			if current != "" {
+				entry := makeEntry(current)
+				if ch == ',' {
+					entry.FallbackOnNotFound = true
+				} else {
+					entry.FallbackOnError = true
+				}
+				entries = append(entries, entry)
+			}
+			current = ""
+		} else {
+			current += string(ch)
+		}
+	}
+	if current != "" {
+		entries = append(entries, makeEntry(current))
+	}
+
+	return entries
+}
+
+func makeEntry(s string) ProxyEntry {
+	s = strings.TrimSpace(s)
+	switch s {
+	case "direct":
+		return ProxyEntry{URL: "direct", IsDirect: true}
+	case "off":
+		return ProxyEntry{IsOff: true}
+	default:
+		return ProxyEntry{URL: s}
+	}
 }

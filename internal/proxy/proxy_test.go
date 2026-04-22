@@ -131,3 +131,140 @@ func TestProxyUnmatchedRequestReturns404(t *testing.T) {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }
+
+func TestProxyFallbackChain_FirstFails404_SecondSucceeds(t *testing.T) {
+	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer upstream1.Close()
+
+	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"Version":"v1.0.0","Time":"2020-01-01T00:00:00Z"}`))
+	}))
+	defer upstream2.Close()
+
+	checkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
+	}))
+	defer checkSrv.Close()
+
+	gm := &manager.GolangManager{}
+	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true)
+
+	chain := upstream1.URL + "," + upstream2.URL
+	p := New([]ActiveManager{{Manager: gm, Upstream: chain}}, client, spinner)
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/github.com/foo/bar/@v/v1.0.0.info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200 from fallback, got %d", resp.StatusCode)
+	}
+	if string(body) == "" {
+		t.Error("expected non-empty body from second upstream")
+	}
+}
+
+func TestProxyFallbackChain_PipeFallsBackOnAnyError(t *testing.T) {
+	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream1.Close()
+
+	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"Version":"v1.0.0","Time":"2020-01-01T00:00:00Z"}`))
+	}))
+	defer upstream2.Close()
+
+	checkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
+	}))
+	defer checkSrv.Close()
+
+	gm := &manager.GolangManager{}
+	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true)
+
+	chain := upstream1.URL + "|" + upstream2.URL
+	p := New([]ActiveManager{{Manager: gm, Upstream: chain}}, client, spinner)
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/github.com/foo/bar/@v/v1.0.0.info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200 from pipe fallback, got %d", resp.StatusCode)
+	}
+	if string(body) == "" {
+		t.Error("expected non-empty body from second upstream")
+	}
+}
+
+func TestProxyFallbackChain_CommaDoesNotFallbackOn500(t *testing.T) {
+	upstream1 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream1.Close()
+
+	upstream2 := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("should not reach"))
+	}))
+	defer upstream2.Close()
+
+	gm := &manager.GolangManager{}
+	client := check.NewClient("http://127.0.0.1:1", 1*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true)
+
+	chain := upstream1.URL + "," + upstream2.URL
+	p := New([]ActiveManager{{Manager: gm, Upstream: chain}}, client, spinner)
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/github.com/foo/bar/@v/v1.0.0.info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 500 {
+		t.Errorf("expected 500 (no fallback on comma for 500), got %d", resp.StatusCode)
+	}
+}
+
+func TestProxyFallbackChain_DirectEntrySkipped(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	gm := &manager.GolangManager{}
+	client := check.NewClient("http://127.0.0.1:1", 1*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true)
+
+	chain := upstream.URL + ",direct"
+	p := New([]ActiveManager{{Manager: gm, Upstream: chain}}, client, spinner)
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/github.com/foo/bar/@v/v1.0.0.info")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 404 {
+		t.Errorf("expected 404 when chain exhausted, got %d", resp.StatusCode)
+	}
+}
