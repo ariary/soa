@@ -1,12 +1,12 @@
-# 🛃 soa
+# 🥢 soa
 
 Your packages go through customs now.
 
 ## The gist
 
-`soa` wraps your package manager commands and intercepts every dependency download through a local proxy. Before any archive reaches your machine, it gets checked against a security policy server. If the package is too fresh, too sketchy, or fails analysis — it gets stopped at the border.
+`soa` wraps your package manager commands and intercepts every dependency download through a proxy. Before any archive reaches your machine, it gets checked against a security policy server.  **It gets stopped at the border depending on your policies** (If the package is too fresh, too sketchy, or fails analysis —)
 
-Works with Go today. npm and pip are next in line.
+Think [supply-chain attacks](https://github.com/ariary/malicious-go-package) — a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
 
 ## Show me
 
@@ -20,7 +20,7 @@ Terminal 2 — prefix any command with `soa`:
 soa make build
 ```
 
-That's it. `soa` doesn't care what you run — it sets up a local proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
+That's it. `soa` doesn't care what you run. It sets up  proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
 
 ```
 [soa] ⠋ scanning github.com/gin-gonic/gin@v1.9.1
