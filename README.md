@@ -15,12 +15,12 @@ Terminal 1 — start the check server:
 soa serve
 ```
 
-Terminal 2 — install packages as usual, just prefix with `soa`:
+Terminal 2 — prefix any command with `soa`:
 ```bash
-soa go get github.com/gin-gonic/gin
+soa make build
 ```
 
-That's it. `soa` sets up the proxy, rewires `GOPROXY`, runs your command, and checks every `.zip` download before it lands. You'll see this while it works:
+That's it. `soa` doesn't care what you run — it sets up a local proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
 
 ```
 [soa] ⠋ scanning github.com/gin-gonic/gin@v1.9.1
@@ -32,10 +32,11 @@ If something gets blocked:
 [soa] ✗ github.com/sketchy/lib@v0.0.1 blocked: published 2 days ago
 ```
 
-It works with aliases too — `soa` doesn't care what binary you run:
+`soa` wraps anything — your toolchain, your aliases, your scripts:
 ```bash
-soa gogo test ./...     # if 'gogo' is your Go alias
-soa make build          # anything that triggers go module downloads
+soa go test ./...
+soa gogo build          # custom alias? no problem
+soa ./scripts/deps.sh   # anything that pulls packages
 ```
 
 ## Get it
