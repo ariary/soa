@@ -1,0 +1,15 @@
+# soa configuration
+# Place this at ~/.config/soa/config.yaml
+
+check_url: "http://localhost:9090"
+
+proxy:
+  port: 8080
+
+poll_interval: "500ms"
+check_timeout: "30s"
+
+server:
+  port: 9090
+  cache_path: "~/.config/soa/approved.json"
+  max_age_days: 7
