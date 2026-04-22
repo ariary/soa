@@ -32,7 +32,7 @@ If something gets blocked:
 [soa] ✗ github.com/sketchy/lib@v0.0.1 blocked: published 2 days ago
 ```
 
-`soa` wraps anything — your toolchain, your aliases, your scripts:
+`soa` wraps anything *.i.e* your toolchain, your aliases, your scripts:
 ```bash
 soa go test ./...
 soa gogo build          # custom alias? no problem
@@ -59,7 +59,7 @@ you ─► soa ─► local proxy ─► check server ─► allow/block
 2. Starts a local HTTP proxy and overrides the relevant env vars to point to it
 3. Spawns your command with the modified environment
 4. For every source archive download, asks the check server
-5. Metadata requests pass through — no delay on lookups
+5. Metadata requests pass through (no delay on lookups)
 6. When done, the proxy shuts down and `soa` exits with your command's exit code
 
 Currently supported: **Go**. Each ecosystem is a `Manager` — adding one is a single interface implementation.
@@ -98,7 +98,7 @@ soa --go=false npm install foo   # don't intercept Go, only npm (future)
 ## FAQ
 
 **What if the check server is down?**
-All packages are blocked. soa fails closed — no free passes.
+All packages are blocked. soa fails closed. no free passes.
 
 **Does this slow things down?**
 Only source archive downloads go through the check. Metadata requests flow straight through. If the package is in the approved cache, the check is instant.
