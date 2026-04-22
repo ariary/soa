@@ -4,9 +4,9 @@ Your packages go through customs now.
 
 ## The gist
 
-`soa` wraps your package manager commands and intercepts every dependency download through a proxy. Before any archive reaches your machine, it gets checked against a security policy server.  **It gets stopped at the border depending on your policies** (If the package is too fresh, too sketchy, or fails analysis —)
+`soa` wraps your package manager commands and intercepts every dependency download through a proxy. Before any archive reaches your machine, it gets checked against a security policy server.  **It gets stopped at the border depending on your policies** (If the package is too fresh, too sketchy, or fails analysis)
 
-Think [supply-chain attacks](https://github.com/ariary/malicious-go-package) — a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
+Think [supply-chain attacks](https://github.com/ariary/malicious-go-package): a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
 
 ## Show me
 
@@ -52,16 +52,17 @@ you ─► soa ─► local proxy ─► check server ─► allow/block
                    │                              │
                    │ if allowed                   │
                    ▼                              │
-              upstream proxy ◄────────────────────┘
-              (proxy.golang.org)
+              upstream registry ◄─────────────────┘
 ```
 
-1. `soa` reads your `GOPROXY` to find the real upstream
-2. Starts a local HTTP proxy and overrides `GOPROXY` to point to it
+1. `soa` detects active ecosystems and reads their upstream registry (e.g. `GOPROXY` for Go)
+2. Starts a local HTTP proxy and overrides the relevant env vars to point to it
 3. Spawns your command with the modified environment
-4. For every `.zip` request (actual source code downloads), asks the check server
-5. `.info` and `.mod` requests pass through — no delay on metadata
+4. For every source archive download, asks the check server
+5. Metadata requests pass through — no delay on lookups
 6. When done, the proxy shuts down and `soa` exits with your command's exit code
+
+Currently supported: **Go**. Each ecosystem is a `Manager` — adding one is a single interface implementation.
 
 ## Knobs
 
@@ -96,14 +97,11 @@ soa --go=false npm install foo   # don't intercept Go, only npm (future)
 
 ## FAQ
 
-**What if I trust everything?**
-Don't use soa then. We respect your bravery.
-
 **What if the check server is down?**
 All packages are blocked. soa fails closed — no free passes.
 
 **Does this slow things down?**
-Only `.zip` downloads go through the check. Metadata (`.info`, `.mod`) flows straight through. If the package is in the approved cache, the check is instant.
+Only source archive downloads go through the check. Metadata requests flow straight through. If the package is in the approved cache, the check is instant.
 
 **Can I use my own check server?**
 Yes. Point `check_url` to any server that speaks the [check API](pkg/checkapi/checkapi.go). The built-in `soa serve` is just a reference implementation.

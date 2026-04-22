@@ -13,31 +13,24 @@ import (
 )
 
 func main() {
-	if len(os.Args) < 2 {
-		fmt.Fprintln(os.Stderr, "Usage: soa <command> [args...] or soa serve [--port]")
-		os.Exit(1)
-	}
-
-	if os.Args[1] == "serve" {
-		serveCmd()
-		return
-	}
-
-	proxyCmd()
-}
-
-func serveCmd() {
 	cli := quicli.Cli{
-		Usage:       "soa serve [flags]",
-		Description: "Start the soa reference check server",
+		Usage:       "soa [flags] <command> [args...]",
+		Description: "Your packages go through customs now",
 		Flags: quicli.Flags{
-			{Name: "port", Default: 0, Description: "port to listen on (overrides config)"},
+			{Name: "verbose", Default: false, Description: "show allowed packages (only blocked are shown by default)"},
+			{Name: "go", Default: true, Description: "intercept Go package downloads"},
+			{Name: "port", Default: 0, Description: "port to listen on (overrides config)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"serve"}},
+		},
+		Function: proxyCmd,
+		Subcommands: quicli.Subcommands{
+			{Name: "serve", Description: "Start the soa reference check server", Function: serveCmd},
 		},
 	}
 
-	os.Args = append(os.Args[:1], os.Args[2:]...)
-	cfg_parsed := cli.Parse()
+	cli.RunWithSubcommand()
+}
 
+func serveCmd(cfg_parsed quicli.Config) {
 	cfg := config.Load()
 
 	port := cfg_parsed.GetIntFlag("port")
@@ -64,38 +57,25 @@ func serveCmd() {
 	}
 }
 
-func proxyCmd() {
+func proxyCmd(cfg_parsed quicli.Config) {
 	cfg := config.Load()
 
-	disableGo := false
-	cmdStart := 1
+	verbose := cfg_parsed.GetBoolFlag("verbose")
+	enableGo := cfg_parsed.GetBoolFlag("go")
 
-	for i := 1; i < len(os.Args); i++ {
-		switch os.Args[i] {
-		case "--go=false":
-			disableGo = true
-			cmdStart = i + 1
-		default:
-			cmdStart = i
-			goto done
-		}
-	}
-done:
-
-	if cmdStart >= len(os.Args) {
-		fmt.Fprintln(os.Stderr, "Usage: soa [--go=false] <command> [args...]")
+	args := cfg_parsed.Args
+	if len(args) == 0 {
+		fmt.Fprintln(os.Stderr, "Usage: soa [flags] <command> [args...]")
 		os.Exit(1)
 	}
 
-	args := os.Args[cmdStart:]
-
 	var managers []manager.Manager
-	if !disableGo {
+	if enableGo {
 		managers = append(managers, &manager.GolangManager{})
 	}
 
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 
-	exitCode := orchestrator.Run(cfg, managers, args, os.Environ(), isTTY)
+	exitCode := orchestrator.Run(cfg, managers, args, os.Environ(), isTTY, verbose)
 	os.Exit(exitCode)
 }

@@ -23,16 +23,18 @@ type Spinner struct {
 	mu      sync.Mutex
 	w       io.Writer
 	plain   bool
+	verbose bool
 	entries map[string]*entry
 	stop    chan struct{}
 	wg      sync.WaitGroup
 	frame   int
 }
 
-func NewSpinner(w io.Writer, plain bool) *Spinner {
+func NewSpinner(w io.Writer, plain, verbose bool) *Spinner {
 	s := &Spinner{
 		w:       w,
 		plain:   plain,
+		verbose: verbose,
 		entries: make(map[string]*entry),
 		stop:    make(chan struct{}),
 	}
@@ -67,10 +69,10 @@ func (s *Spinner) Stop(module string, allowed bool, reason string) {
 		e.reason = reason
 	}
 	if s.plain {
-		if allowed {
-			fmt.Fprintf(s.w, "[soa] ✓ %s allowed\n", module)
-		} else {
+		if !allowed {
 			fmt.Fprintf(s.w, "[soa] ✗ %s blocked: %s\n", module, reason)
+		} else if s.verbose {
+			fmt.Fprintf(s.w, "[soa] ✓ %s allowed\n", module)
 		}
 	}
 }
@@ -107,10 +109,10 @@ func (s *Spinner) render(final bool) {
 
 	for _, e := range s.entries {
 		if e.done {
-			if e.allowed {
-				fmt.Fprintf(s.w, "\033[2K\r[soa] ✓ %s@%s allowed\n", e.module, e.version)
-			} else {
+			if !e.allowed {
 				fmt.Fprintf(s.w, "\033[2K\r[soa] ✗ %s@%s blocked: %s\n", e.module, e.version, e.reason)
+			} else if s.verbose {
+				fmt.Fprintf(s.w, "\033[2K\r[soa] ✓ %s@%s allowed\n", e.module, e.version)
 			}
 		} else if !final {
 			line := fmt.Sprintf("[soa] %c scanning %s@%s", frames[s.frame%len(frames)], e.module, e.version)

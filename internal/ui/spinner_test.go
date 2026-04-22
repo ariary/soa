@@ -9,7 +9,7 @@ import (
 
 func TestSpinnerStartStop(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewSpinner(&buf, false)
+	s := NewSpinner(&buf, false, true)
 	s.Start("github.com/foo/bar", "v1.2.3")
 	time.Sleep(150 * time.Millisecond)
 	s.Stop("github.com/foo/bar", true, "")
@@ -26,7 +26,7 @@ func TestSpinnerStartStop(t *testing.T) {
 
 func TestSpinnerBlocked(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewSpinner(&buf, false)
+	s := NewSpinner(&buf, false, true)
 	s.Start("github.com/foo/bar", "v1.2.3")
 	time.Sleep(100 * time.Millisecond)
 	s.Stop("github.com/foo/bar", false, "too new")
@@ -40,7 +40,7 @@ func TestSpinnerBlocked(t *testing.T) {
 
 func TestSpinnerProgress(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewSpinner(&buf, false)
+	s := NewSpinner(&buf, false, true)
 	s.Start("github.com/foo/bar", "v1.2.3")
 	s.SetProgress("github.com/foo/bar", 0.5)
 	time.Sleep(150 * time.Millisecond)
@@ -51,7 +51,7 @@ func TestSpinnerProgress(t *testing.T) {
 
 func TestSpinnerPlainMode(t *testing.T) {
 	var buf bytes.Buffer
-	s := NewSpinner(&buf, true)
+	s := NewSpinner(&buf, true, true)
 	s.Start("github.com/foo/bar", "v1.2.3")
 	time.Sleep(100 * time.Millisecond)
 	s.Stop("github.com/foo/bar", true, "")

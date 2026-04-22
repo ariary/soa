@@ -16,7 +16,8 @@ import (
 	"github.com/ariary/soa/internal/ui"
 )
 
-func Run(cfg config.Config, managers []manager.Manager, args []string, env []string, isTTY bool) int {
+func Run(cfg config.Config, managers []manager.Manager, args []string, env []string, isTTY bool, verbose ...bool) int {
+	isVerbose := len(verbose) > 0 && verbose[0]
 	port := cfg.Proxy.Port
 	if port == 0 {
 		port = freePort()
@@ -41,7 +42,7 @@ func Run(cfg config.Config, managers []manager.Manager, args []string, env []str
 	}
 
 	client := check.NewClient(cfg.CheckURL, cfg.CheckTimeout, cfg.PollInterval)
-	spinner := ui.NewSpinner(os.Stderr, !isTTY)
+	spinner := ui.NewSpinner(os.Stderr, !isTTY, isVerbose)
 
 	p := proxy.New(activeManagers, client, spinner)
 

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"sync"
@@ -45,6 +46,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) ListenAndServe(port int) error {
 	addr := fmt.Sprintf(":%d", port)
+	log.Printf("[server] listening on %s (max_age_days=%d)", addr, s.maxAgeDays)
 	srv := &http.Server{Addr: addr, Handler: s.Handler()}
 	return srv.ListenAndServe()
 }
@@ -61,16 +63,21 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[check] %s@%s", req.Module, req.Version)
+
 	if s.isCached(req.Module, req.Version) {
+		log.Printf("[check] %s@%s → allowed (cached)", req.Module, req.Version)
 		json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
 		return
 	}
 
 	publishTime, err := s.fetchPublishTime(req.Module, req.Version)
 	if err != nil {
+		reason := fmt.Sprintf("failed to verify package age: %v", err)
+		log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
 		json.NewEncoder(w).Encode(checkapi.CheckResponse{
 			Status: checkapi.StatusBlocked,
-			Reason: fmt.Sprintf("failed to verify package age: %v", err),
+			Reason: reason,
 		})
 		return
 	}
@@ -80,14 +87,17 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 	if age < maxAge {
 		days := int(age.Hours() / 24)
+		reason := fmt.Sprintf("published %d days ago (minimum: %d days)", days, s.maxAgeDays)
+		log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
 		json.NewEncoder(w).Encode(checkapi.CheckResponse{
 			Status: checkapi.StatusBlocked,
-			Reason: fmt.Sprintf("published %d days ago (minimum: %d days)", days, s.maxAgeDays),
+			Reason: reason,
 		})
 		return
 	}
 
 	s.addToCache(req.Module, req.Version)
+	log.Printf("[check] %s@%s → allowed (age: %d days)", req.Module, req.Version, int(age.Hours()/24))
 	json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
 }
 

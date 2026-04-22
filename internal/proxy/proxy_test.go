@@ -27,7 +27,7 @@ func TestProxyForwardsNonZipTransparently(t *testing.T) {
 
 	gm := &manager.GolangManager{}
 	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
-	spinner := ui.NewSpinner(io.Discard, true)
+	spinner := ui.NewSpinner(io.Discard, true, false)
 
 	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner)
 	srv := httptest.NewServer(p)
@@ -61,7 +61,7 @@ func TestProxyChecksZipAndAllows(t *testing.T) {
 
 	gm := &manager.GolangManager{}
 	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
-	spinner := ui.NewSpinner(io.Discard, true)
+	spinner := ui.NewSpinner(io.Discard, true, false)
 
 	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner)
 	srv := httptest.NewServer(p)
@@ -98,7 +98,7 @@ func TestProxyChecksZipAndBlocks(t *testing.T) {
 
 	gm := &manager.GolangManager{}
 	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
-	spinner := ui.NewSpinner(io.Discard, true)
+	spinner := ui.NewSpinner(io.Discard, true, false)
 
 	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner)
 	srv := httptest.NewServer(p)
@@ -116,7 +116,7 @@ func TestProxyChecksZipAndBlocks(t *testing.T) {
 }
 
 func TestProxyUnmatchedRequestReturns404(t *testing.T) {
-	spinner := ui.NewSpinner(io.Discard, true)
+	spinner := ui.NewSpinner(io.Discard, true, false)
 	p := New([]ActiveManager{}, nil, spinner)
 	srv := httptest.NewServer(p)
 	defer srv.Close()
