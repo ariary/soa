@@ -20,7 +20,7 @@ Terminal 2 — prefix any command with `soa`:
 soa make build
 ```
 
-That's it. `soa` doesn't care what you run. It sets up  proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
+That's it. `soa` doesn't care what you run. It sets up a local proxy, rewires the right env vars, and checks every dependency download before it lands. You'll see this while it works:
 
 ```
 [soa] ⠋ scanning github.com/gin-gonic/gin@v1.9.1
