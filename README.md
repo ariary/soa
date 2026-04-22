@@ -6,6 +6,8 @@ Your packages go through customs now.
 
 `soa` wraps your package manager commands and intercepts every dependency download through a local proxy. Before any archive reaches your machine, it gets checked against a security policy server. If the package is too fresh, too sketchy, or fails analysis — it gets stopped at the border.
 
+Think [supply-chain attacks](https://github.com/ariary/malicious-go-package) — a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
+
 Works with Go today. npm and pip are next in line.
 
 ## Show me
