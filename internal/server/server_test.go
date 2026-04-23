@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,10 +11,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ariary/soa/internal/analyzer"
+	"github.com/ariary/soa/internal/config"
 	"github.com/ariary/soa/pkg/checkapi"
 )
 
-func newTestServer(t *testing.T, maxAgeDays int, upstreamTime time.Time) (*Server, *httptest.Server) {
+func newTestServerWithRules(t *testing.T, rules config.RulesConfig, upstreamTime time.Time) (*Server, *httptest.Server) {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		json.NewEncoder(w).Encode(map[string]any{
@@ -24,8 +27,15 @@ func newTestServer(t *testing.T, maxAgeDays int, upstreamTime time.Time) (*Serve
 	t.Cleanup(upstream.Close)
 
 	cachePath := filepath.Join(t.TempDir(), "approved.json")
-	s := NewServer(maxAgeDays, cachePath, upstream.URL)
+	s := NewServer(rules, cachePath, upstream.URL)
 	return s, httptest.NewServer(s.Handler())
+}
+
+func newTestServer(t *testing.T, maxAgeDays int, upstreamTime time.Time) (*Server, *httptest.Server) {
+	t.Helper()
+	return newTestServerWithRules(t, config.RulesConfig{
+		MaxAge: config.MaxAgeRule{Enabled: true, MinDays: maxAgeDays},
+	}, upstreamTime)
 }
 
 func TestCheckAllowed_OldPackage(t *testing.T) {
@@ -105,7 +115,8 @@ func TestCachePersistence(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	s1 := NewServer(7, cachePath, upstream.URL)
+	rules := config.RulesConfig{MaxAge: config.MaxAgeRule{Enabled: true, MinDays: 7}}
+	s1 := NewServer(rules, cachePath, upstream.URL)
 	srv1 := httptest.NewServer(s1.Handler())
 
 	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
@@ -117,8 +128,213 @@ func TestCachePersistence(t *testing.T) {
 		t.Fatalf("cache file should exist: %v", err)
 	}
 
-	s2 := NewServer(7, cachePath, upstream.URL)
+	s2 := NewServer(rules, cachePath, upstream.URL)
 	if !s2.isCached("github.com/foo/bar", "v1.0.0") {
 		t.Error("expected cache entry to survive restart")
+	}
+}
+
+func TestMaxAgeDisabled_AllowsNewPackage(t *testing.T) {
+	// A 2-day-old package would normally be blocked with minDays=7,
+	// but with max_age disabled it should be allowed.
+	rules := config.RulesConfig{
+		MaxAge: config.MaxAgeRule{Enabled: false, MinDays: 7},
+	}
+	_, srv := newTestServerWithRules(t, rules, time.Now().Add(-2*24*time.Hour))
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusAllowed {
+		t.Errorf("expected allowed when max_age disabled, got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+func TestBothRulesDisabled_Passthrough(t *testing.T) {
+	// When both rules are disabled, everything should pass through.
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: false},
+		Analysis: config.AnalysisRule{Enabled: false},
+	}
+	_, srv := newTestServerWithRules(t, rules, time.Now().Add(-1*time.Hour))
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/brand-new/pkg", Version: "v0.0.1"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusAllowed {
+		t.Errorf("expected passthrough allowed, got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+// --- mock analyzer for analysis tests ---
+
+type mockTestAnalyzer struct {
+	result analyzer.AnalysisResult
+}
+
+func (m *mockTestAnalyzer) Name() string { return "mock" }
+func (m *mockTestAnalyzer) Analyze(ctx context.Context, req analyzer.AnalysisRequest) (analyzer.AnalysisResult, error) {
+	return m.result, nil
+}
+
+func TestAnalysisEnabled_ReturnsProcessing(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	// Package published 6 months ago — passes max_age check.
+	s, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	s.SetAnalyzers([]analyzer.Analyzer{
+		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: false, Summary: "clean"}},
+	})
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusProcessing {
+		t.Errorf("expected processing, got %s: %s", cr.Status, cr.Reason)
+	}
+	if cr.ID == "" {
+		t.Error("expected non-empty job ID")
+	}
+}
+
+func TestPollJobStatus(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	s, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	s.SetAnalyzers([]analyzer.Analyzer{
+		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: false, Summary: "clean"}},
+	})
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	resp.Body.Close()
+
+	if cr.Status != checkapi.StatusProcessing {
+		t.Fatalf("expected processing, got %s", cr.Status)
+	}
+	jobID := cr.ID
+
+	// Poll until the job completes.
+	var finalStatus string
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		pollResp, err := http.Get(srv.URL + "/check/" + jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pollCR checkapi.CheckResponse
+		json.NewDecoder(pollResp.Body).Decode(&pollCR)
+		pollResp.Body.Close()
+		if pollCR.Status != checkapi.StatusProcessing {
+			finalStatus = pollCR.Status
+			break
+		}
+	}
+
+	if finalStatus != checkapi.StatusAllowed {
+		t.Errorf("expected allowed after polling, got %s", finalStatus)
+	}
+}
+
+func TestPollJobBlocked(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	s, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	s.SetAnalyzers([]analyzer.Analyzer{
+		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: true, Summary: "suspicious code found"}},
+	})
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	resp.Body.Close()
+
+	if cr.Status != checkapi.StatusProcessing {
+		t.Fatalf("expected processing, got %s", cr.Status)
+	}
+	jobID := cr.ID
+
+	var finalStatus string
+	var finalReason string
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		pollResp, err := http.Get(srv.URL + "/check/" + jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pollCR checkapi.CheckResponse
+		json.NewDecoder(pollResp.Body).Decode(&pollCR)
+		pollResp.Body.Close()
+		if pollCR.Status != checkapi.StatusProcessing {
+			finalStatus = pollCR.Status
+			finalReason = pollCR.Reason
+			break
+		}
+	}
+
+	if finalStatus != checkapi.StatusBlocked {
+		t.Errorf("expected blocked after polling, got %s", finalStatus)
+	}
+	if finalReason == "" {
+		t.Error("expected a reason for blocking")
+	}
+}
+
+func TestPollJob_NotFound(t *testing.T) {
+	rules := config.RulesConfig{}
+	_, srv := newTestServerWithRules(t, rules, time.Now())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/check/nonexistent-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }

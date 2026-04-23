@@ -77,7 +77,14 @@ check_timeout: "30s"
 server:
   port: 9090
   cache_path: "~/.config/soa/approved.json"
-  max_age_days: 7
+  rules:
+    max_age:
+      enabled: true
+      min_days: 7
+    analysis:
+      enabled: false
+      provider: "ollama"
+      model: "llama3"
 ```
 
 Every value can be overridden with env vars:
@@ -88,12 +95,20 @@ Every value can be overridden with env vars:
 | `proxy.port` | `SOA_PROXY_PORT` | `8080` |
 | `check_timeout` | `SOA_CHECK_TIMEOUT` | `30s` |
 | `server.port` | `SOA_SERVER_PORT` | `9090` |
-| `server.max_age_days` | `SOA_SERVER_MAX_AGE_DAYS` | `7` |
+| `rules.max_age.enabled` | `SOA_RULE_MAX_AGE_ENABLED` | `true` |
+| `rules.max_age.min_days` | `SOA_RULE_MAX_AGE_MIN_DAYS` | `7` |
+| `rules.analysis.enabled` | `SOA_RULE_ANALYSIS_ENABLED` | `false` |
+| `rules.analysis.provider` | `SOA_ANALYSIS_PROVIDER` | `ollama` |
+| `rules.analysis.model` | `SOA_ANALYSIS_MODEL` | `llama3` |
 
 Disable an ecosystem for a single run:
 ```bash
 soa --go=false npm install foo   # don't intercept Go, only npm (future)
 ```
+
+## Malware analysis
+
+`soa serve` can also send packages to an LLM for malware detection — code analysis + release metadata checks running in parallel. Off by default, enable it with a local [ollama](https://ollama.com) or a free-tier API (OpenAI, Gemini). See [docs/malware-analysis.md](docs/malware-analysis.md) for setup.
 
 ## FAQ
 
