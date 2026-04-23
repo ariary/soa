@@ -7,9 +7,11 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
+	"github.com/ariary/soa/internal/analyzer"
 	"github.com/ariary/soa/internal/config"
 	"github.com/ariary/soa/pkg/checkapi"
 )
@@ -26,6 +28,9 @@ type Server struct {
 	upstreamURL string
 	mu          sync.RWMutex
 	cache       map[string]cacheEntry
+	analyzers   []analyzer.Analyzer
+	jobs        map[string]*AnalysisJob
+	jobsMu      sync.RWMutex
 }
 
 func NewServer(rules config.RulesConfig, cachePath, upstreamURL string) *Server {
@@ -34,13 +39,22 @@ func NewServer(rules config.RulesConfig, cachePath, upstreamURL string) *Server 
 		cachePath:   cachePath,
 		upstreamURL: upstreamURL,
 		cache:       make(map[string]cacheEntry),
+		jobs:        make(map[string]*AnalysisJob),
 	}
 	s.loadCache()
+	s.startJobCleanup()
 	return s
+}
+
+// SetAnalyzers configures the analyzers that will be run when analysis is
+// enabled. This should be called before ListenAndServe.
+func (s *Server) SetAnalyzers(analyzers []analyzer.Analyzer) {
+	s.analyzers = analyzers
 }
 
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("/check/", s.handlePollJob)
 	mux.HandleFunc("/check", s.handleCheck)
 	return mux
 }
@@ -100,11 +114,42 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Analysis check (placeholder — will be wired in Task 8)
+	// Analysis check
+	if s.rules.Analysis.Enabled && len(s.analyzers) > 0 {
+		job := s.createJob(req.Module, req.Version)
+		go s.runAnalysis(job)
+		log.Printf("[check] %s@%s → processing (job %s)", req.Module, req.Version, job.ID)
+		json.NewEncoder(w).Encode(checkapi.CheckResponse{
+			Status: checkapi.StatusProcessing,
+			ID:     job.ID,
+		})
+		return
+	}
 
 	s.addToCache(req.Module, req.Version)
 	log.Printf("[check] %s@%s → allowed", req.Module, req.Version)
 	json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
+}
+
+func (s *Server) handlePollJob(w http.ResponseWriter, r *http.Request) {
+	id := strings.TrimPrefix(r.URL.Path, "/check/")
+	if id == "" {
+		http.Error(w, "missing job id", http.StatusBadRequest)
+		return
+	}
+	job := s.getJob(id)
+	if job == nil {
+		http.Error(w, "job not found", http.StatusNotFound)
+		return
+	}
+	job.mu.Lock()
+	resp := checkapi.CheckResponse{
+		Status: job.Status,
+		Reason: job.Summary,
+		ID:     job.ID,
+	}
+	job.mu.Unlock()
+	json.NewEncoder(w).Encode(resp)
 }
 
 func (s *Server) fetchPublishTime(module, version string) (time.Time, error) {

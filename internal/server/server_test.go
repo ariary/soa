@@ -2,6 +2,7 @@ package server
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ariary/soa/internal/analyzer"
 	"github.com/ariary/soa/internal/config"
 	"github.com/ariary/soa/pkg/checkapi"
 )
@@ -175,5 +177,164 @@ func TestBothRulesDisabled_Passthrough(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&cr)
 	if cr.Status != checkapi.StatusAllowed {
 		t.Errorf("expected passthrough allowed, got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+// --- mock analyzer for analysis tests ---
+
+type mockTestAnalyzer struct {
+	result analyzer.AnalysisResult
+}
+
+func (m *mockTestAnalyzer) Name() string { return "mock" }
+func (m *mockTestAnalyzer) Analyze(ctx context.Context, req analyzer.AnalysisRequest) (analyzer.AnalysisResult, error) {
+	return m.result, nil
+}
+
+func TestAnalysisEnabled_ReturnsProcessing(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	// Package published 6 months ago — passes max_age check.
+	s, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	s.SetAnalyzers([]analyzer.Analyzer{
+		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: false, Summary: "clean"}},
+	})
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusProcessing {
+		t.Errorf("expected processing, got %s: %s", cr.Status, cr.Reason)
+	}
+	if cr.ID == "" {
+		t.Error("expected non-empty job ID")
+	}
+}
+
+func TestPollJobStatus(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	s, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	s.SetAnalyzers([]analyzer.Analyzer{
+		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: false, Summary: "clean"}},
+	})
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	resp.Body.Close()
+
+	if cr.Status != checkapi.StatusProcessing {
+		t.Fatalf("expected processing, got %s", cr.Status)
+	}
+	jobID := cr.ID
+
+	// Poll until the job completes.
+	var finalStatus string
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		pollResp, err := http.Get(srv.URL + "/check/" + jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pollCR checkapi.CheckResponse
+		json.NewDecoder(pollResp.Body).Decode(&pollCR)
+		pollResp.Body.Close()
+		if pollCR.Status != checkapi.StatusProcessing {
+			finalStatus = pollCR.Status
+			break
+		}
+	}
+
+	if finalStatus != checkapi.StatusAllowed {
+		t.Errorf("expected allowed after polling, got %s", finalStatus)
+	}
+}
+
+func TestPollJobBlocked(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	s, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	s.SetAnalyzers([]analyzer.Analyzer{
+		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: true, Summary: "suspicious code found"}},
+	})
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	resp.Body.Close()
+
+	if cr.Status != checkapi.StatusProcessing {
+		t.Fatalf("expected processing, got %s", cr.Status)
+	}
+	jobID := cr.ID
+
+	var finalStatus string
+	var finalReason string
+	for i := 0; i < 50; i++ {
+		time.Sleep(10 * time.Millisecond)
+		pollResp, err := http.Get(srv.URL + "/check/" + jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var pollCR checkapi.CheckResponse
+		json.NewDecoder(pollResp.Body).Decode(&pollCR)
+		pollResp.Body.Close()
+		if pollCR.Status != checkapi.StatusProcessing {
+			finalStatus = pollCR.Status
+			finalReason = pollCR.Reason
+			break
+		}
+	}
+
+	if finalStatus != checkapi.StatusBlocked {
+		t.Errorf("expected blocked after polling, got %s", finalStatus)
+	}
+	if finalReason == "" {
+		t.Error("expected a reason for blocking")
+	}
+}
+
+func TestPollJob_NotFound(t *testing.T) {
+	rules := config.RulesConfig{}
+	_, srv := newTestServerWithRules(t, rules, time.Now())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/check/nonexistent-id")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("expected 404, got %d", resp.StatusCode)
 	}
 }

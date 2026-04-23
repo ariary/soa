@@ -6,9 +6,11 @@ import (
 	"path/filepath"
 
 	"github.com/ariary/quicli/pkg/quicli"
+	"github.com/ariary/soa/internal/analyzer"
 	"github.com/ariary/soa/internal/config"
 	"github.com/ariary/soa/internal/manager"
 	"github.com/ariary/soa/internal/orchestrator"
+	"github.com/ariary/soa/internal/provider"
 	"github.com/ariary/soa/internal/server"
 	"golang.org/x/term"
 )
@@ -52,6 +54,23 @@ func serveCmd(cfg_parsed quicli.Config) {
 
 	fmt.Fprintf(os.Stderr, "[soa] check server starting on :%d\n", cfg.Server.Port)
 	s := server.NewServer(cfg.Server.Rules, expandedCachePath, "https://proxy.golang.org")
+
+	if cfg.Server.Rules.Analysis.Enabled {
+		llm, err := provider.New(cfg.Server.Rules.Analysis)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "[soa] provider error: %v\n", err)
+			os.Exit(1)
+		}
+		githubToken := ""
+		if cfg.Server.Rules.Analysis.GitHubTokenEnv != "" {
+			githubToken = os.Getenv(cfg.Server.Rules.Analysis.GitHubTokenEnv)
+		}
+		codeAnalyzer := analyzer.NewCodeAnalyzer(llm, "https://proxy.golang.org", cfg.Server.Rules.Analysis.MaxSourceBytes)
+		releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", githubToken, "https://proxy.golang.org")
+		s.SetAnalyzers([]analyzer.Analyzer{codeAnalyzer, releaseAnalyzer})
+		fmt.Fprintf(os.Stderr, "[soa] analysis enabled (provider: %s, model: %s)\n", llm.Name(), cfg.Server.Rules.Analysis.Model)
+	}
+
 	if err := s.ListenAndServe(cfg.Server.Port); err != nil {
 		fmt.Fprintf(os.Stderr, "[soa] server error: %v\n", err)
 		os.Exit(1)
