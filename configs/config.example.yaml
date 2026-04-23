@@ -12,4 +12,15 @@ check_timeout: "30s"
 server:
   port: 9090
   cache_path: "~/.config/soa/approved.json"
-  max_age_days: 7
+  rules:
+    max_age:
+      enabled: true
+      min_days: 7
+    analysis:
+      enabled: false
+      provider: "ollama"
+      # api_key_env: "OPENAI_API_KEY"
+      model: "llama3"
+      # base_url: "https://api.openai.com/v1"
+      max_source_bytes: 524288
+      # github_token_env: "GITHUB_TOKEN"

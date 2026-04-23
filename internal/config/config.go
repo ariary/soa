@@ -21,18 +21,64 @@ type ProxyConfig struct {
 }
 
 type ServerConfig struct {
-	Port       int    `yaml:"port"`
-	CachePath  string `yaml:"cache_path"`
-	MaxAgeDays int    `yaml:"max_age_days"`
+	Port      int         `yaml:"port"`
+	CachePath string      `yaml:"cache_path"`
+	Rules     RulesConfig `yaml:"rules"`
+}
+
+type RulesConfig struct {
+	MaxAge   MaxAgeRule   `yaml:"max_age"`
+	Analysis AnalysisRule `yaml:"analysis"`
+}
+
+type MaxAgeRule struct {
+	Enabled bool `yaml:"enabled"`
+	MinDays int  `yaml:"min_days"`
+}
+
+type AnalysisRule struct {
+	Enabled        bool   `yaml:"enabled"`
+	Provider       string `yaml:"provider"`
+	APIKeyEnv      string `yaml:"api_key_env"`
+	Model          string `yaml:"model"`
+	BaseURL        string `yaml:"base_url"`
+	MaxSourceBytes int    `yaml:"max_source_bytes"`
+	GitHubTokenEnv string `yaml:"github_token_env"`
 }
 
 // yamlConfig mirrors Config but uses strings for durations (yaml.v3 compat).
 type yamlConfig struct {
-	CheckURL     string       `yaml:"check_url"`
-	Proxy        ProxyConfig  `yaml:"proxy"`
-	PollInterval string       `yaml:"poll_interval"`
-	CheckTimeout string       `yaml:"check_timeout"`
-	Server       ServerConfig `yaml:"server"`
+	CheckURL     string           `yaml:"check_url"`
+	Proxy        ProxyConfig      `yaml:"proxy"`
+	PollInterval string           `yaml:"poll_interval"`
+	CheckTimeout string           `yaml:"check_timeout"`
+	Server       yamlServerConfig `yaml:"server"`
+}
+
+type yamlServerConfig struct {
+	Port      int             `yaml:"port"`
+	CachePath string          `yaml:"cache_path"`
+	Rules     yamlRulesConfig `yaml:"rules"`
+}
+
+type yamlRulesConfig struct {
+	MaxAge   yamlMaxAgeRule   `yaml:"max_age"`
+	Analysis yamlAnalysisRule `yaml:"analysis"`
+}
+
+type yamlMaxAgeRule struct {
+	Enabled *bool `yaml:"enabled"`
+	MinDays int   `yaml:"min_days"`
+}
+
+type yamlAnalysisRule struct {
+	Enabled        *bool  `yaml:"enabled"`
+	Provider       string `yaml:"provider"`
+	APIKeyEnv      string `yaml:"api_key_env"`
+	Model          string `yaml:"model"`
+	BaseURL        string `yaml:"base_url"`
+	MaxSourceBytes int    `yaml:"max_source_bytes"`
+	GitHubTokenEnv string `yaml:"github_token_env"`
 }
 
 func defaults() Config {
@@ -42,9 +88,20 @@ func defaults() Config {
 		PollInterval: 500 * time.Millisecond,
 		CheckTimeout: 30 * time.Second,
 		Server: ServerConfig{
-			Port:       9090,
-			CachePath:  "~/.config/soa/approved.json",
-			MaxAgeDays: 7,
+			Port:      9090,
+			CachePath: "~/.config/soa/approved.json",
+			Rules: RulesConfig{
+				MaxAge: MaxAgeRule{
+					Enabled: true,
+					MinDays: 7,
+				},
+				Analysis: AnalysisRule{
+					Enabled:        false,
+					Provider:       "ollama",
+					Model:          "llama3",
+					MaxSourceBytes: 524288,
+				},
+			},
 		},
 	}
 }
@@ -83,14 +140,50 @@ func LoadWithPath(path string) Config {
 				if yc.Server.CachePath != "" {
 					cfg.Server.CachePath = yc.Server.CachePath
 				}
-				if yc.Server.MaxAgeDays != 0 {
-					cfg.Server.MaxAgeDays = yc.Server.MaxAgeDays
+				// Rules: max_age
+				if yc.Server.Rules.MaxAge.Enabled != nil {
+					cfg.Server.Rules.MaxAge.Enabled = *yc.Server.Rules.MaxAge.Enabled
+				}
+				if yc.Server.Rules.MaxAge.MinDays != 0 {
+					cfg.Server.Rules.MaxAge.MinDays = yc.Server.Rules.MaxAge.MinDays
+				}
+				// Rules: analysis
+				if yc.Server.Rules.Analysis.Enabled != nil {
+					cfg.Server.Rules.Analysis.Enabled = *yc.Server.Rules.Analysis.Enabled
+				}
+				if yc.Server.Rules.Analysis.Provider != "" {
+					cfg.Server.Rules.Analysis.Provider = yc.Server.Rules.Analysis.Provider
+				}
+				if yc.Server.Rules.Analysis.APIKeyEnv != "" {
+					cfg.Server.Rules.Analysis.APIKeyEnv = yc.Server.Rules.Analysis.APIKeyEnv
+				}
+				if yc.Server.Rules.Analysis.Model != "" {
+					cfg.Server.Rules.Analysis.Model = yc.Server.Rules.Analysis.Model
+				}
+				if yc.Server.Rules.Analysis.BaseURL != "" {
+					cfg.Server.Rules.Analysis.BaseURL = yc.Server.Rules.Analysis.BaseURL
+				}
+				if yc.Server.Rules.Analysis.MaxSourceBytes != 0 {
+					cfg.Server.Rules.Analysis.MaxSourceBytes = yc.Server.Rules.Analysis.MaxSourceBytes
+				}
+				if yc.Server.Rules.Analysis.GitHubTokenEnv != "" {
+					cfg.Server.Rules.Analysis.GitHubTokenEnv = yc.Server.Rules.Analysis.GitHubTokenEnv
 				}
 			}
 		}
 	}
 	applyEnv(&cfg)
 	return cfg
+}
+
+func parseBoolEnv(v string) (bool, bool) {
+	if v == "true" || v == "1" {
+		return true, true
+	}
+	if v == "false" || v == "0" {
+		return false, true
+	}
+	return false, false
 }
 
 func applyEnv(cfg *Config) {
@@ -120,9 +213,41 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("SOA_SERVER_CACHE_PATH"); v != "" {
 		cfg.Server.CachePath = v
 	}
-	if v := os.Getenv("SOA_SERVER_MAX_AGE_DAYS"); v != "" {
-		if d, err := strconv.Atoi(v); err == nil {
-			cfg.Server.MaxAgeDays = d
+	// Rules: max_age
+	if v := os.Getenv("SOA_RULE_MAX_AGE_ENABLED"); v != "" {
+		if b, ok := parseBoolEnv(v); ok {
+			cfg.Server.Rules.MaxAge.Enabled = b
 		}
+	}
+	if v := os.Getenv("SOA_RULE_MAX_AGE_MIN_DAYS"); v != "" {
+		if d, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Rules.MaxAge.MinDays = d
+		}
+	}
+	// Rules: analysis
+	if v := os.Getenv("SOA_RULE_ANALYSIS_ENABLED"); v != "" {
+		if b, ok := parseBoolEnv(v); ok {
+			cfg.Server.Rules.Analysis.Enabled = b
+		}
+	}
+	if v := os.Getenv("SOA_ANALYSIS_PROVIDER"); v != "" {
+		cfg.Server.Rules.Analysis.Provider = v
+	}
+	if v := os.Getenv("SOA_ANALYSIS_API_KEY_ENV"); v != "" {
+		cfg.Server.Rules.Analysis.APIKeyEnv = v
+	}
+	if v := os.Getenv("SOA_ANALYSIS_MODEL"); v != "" {
+		cfg.Server.Rules.Analysis.Model = v
+	}
+	if v := os.Getenv("SOA_ANALYSIS_BASE_URL"); v != "" {
+		cfg.Server.Rules.Analysis.BaseURL = v
+	}
+	if v := os.Getenv("SOA_ANALYSIS_MAX_SOURCE_BYTES"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Rules.Analysis.MaxSourceBytes = n
+		}
+	}
+	if v := os.Getenv("SOA_ANALYSIS_GITHUB_TOKEN_ENV"); v != "" {
+		cfg.Server.Rules.Analysis.GitHubTokenEnv = v
 	}
 }
