@@ -77,7 +77,14 @@ check_timeout: "30s"
 server:
   port: 9090
   cache_path: "~/.config/soa/approved.json"
-  max_age_days: 7
+  rules:
+    max_age:
+      enabled: true
+      min_days: 7
+    analysis:
+      enabled: false
+      provider: "ollama"
+      model: "llama3"
 ```
 
 Every value can be overridden with env vars:
@@ -88,11 +95,62 @@ Every value can be overridden with env vars:
 | `proxy.port` | `SOA_PROXY_PORT` | `8080` |
 | `check_timeout` | `SOA_CHECK_TIMEOUT` | `30s` |
 | `server.port` | `SOA_SERVER_PORT` | `9090` |
-| `server.max_age_days` | `SOA_SERVER_MAX_AGE_DAYS` | `7` |
+| `rules.max_age.enabled` | `SOA_RULE_MAX_AGE_ENABLED` | `true` |
+| `rules.max_age.min_days` | `SOA_RULE_MAX_AGE_MIN_DAYS` | `7` |
+| `rules.analysis.enabled` | `SOA_RULE_ANALYSIS_ENABLED` | `false` |
+| `rules.analysis.provider` | `SOA_ANALYSIS_PROVIDER` | `ollama` |
+| `rules.analysis.model` | `SOA_ANALYSIS_MODEL` | `llama3` |
 
 Disable an ecosystem for a single run:
 ```bash
 soa --go=false npm install foo   # don't intercept Go, only npm (future)
+```
+
+## Malware analysis
+
+`soa serve` can analyze packages for malware using an LLM. Two parallel checks run on every package:
+
+1. **Code analysis** — extracts source from the archive, sends it to an LLM to detect obfuscation, C2 patterns, exfiltration, and intent mismatch
+2. **Release analysis** — checks GitHub contributor history, release patterns, and dependency changes for signs of compromise
+
+Enable it with ollama (free, local):
+
+```bash
+# Start ollama with a model
+ollama pull llama3
+ollama serve
+```
+
+```yaml
+# ~/.config/soa/config.yaml
+server:
+  rules:
+    max_age:
+      enabled: true
+      min_days: 7
+    analysis:
+      enabled: true
+      provider: "ollama"
+      model: "llama3"
+```
+
+Or with OpenAI/Gemini free tiers:
+
+```yaml
+server:
+  rules:
+    analysis:
+      enabled: true
+      provider: "gemini"
+      api_key_env: "GEMINI_API_KEY"
+      model: "gemini-2.0-flash"
+```
+
+When analysis is enabled, you'll see progress in the spinner:
+
+```
+[soa] ⠋ scanning github.com/foo/bar@v1.2.3 [████░░░░ 45%]
+[soa] ✗ github.com/sketchy/lib@v0.0.1 blocked: init() executes outbound curl to hardcoded IP
 ```
 
 ## FAQ
