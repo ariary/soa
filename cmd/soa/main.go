@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/ariary/quicli/pkg/quicli"
 	"github.com/ariary/soa/internal/config"
@@ -45,12 +46,12 @@ func serveCmd(cfg_parsed quicli.Config) {
 	}
 
 	// Ensure cache directory exists
-	if dir := expandedCachePath[:len(expandedCachePath)-len("/approved.json")]; dir != "" {
+	if dir := filepath.Dir(expandedCachePath); dir != "" {
 		os.MkdirAll(dir, 0755)
 	}
 
 	fmt.Fprintf(os.Stderr, "[soa] check server starting on :%d\n", cfg.Server.Port)
-	s := server.NewServer(cfg.Server.MaxAgeDays, expandedCachePath, "https://proxy.golang.org")
+	s := server.NewServer(cfg.Server.Rules, expandedCachePath, "https://proxy.golang.org")
 	if err := s.ListenAndServe(cfg.Server.Port); err != nil {
 		fmt.Fprintf(os.Stderr, "[soa] server error: %v\n", err)
 		os.Exit(1)

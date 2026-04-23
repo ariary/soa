@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/ariary/soa/internal/config"
 	"github.com/ariary/soa/pkg/checkapi"
 )
 
@@ -20,16 +21,16 @@ type cacheEntry struct {
 }
 
 type Server struct {
-	maxAgeDays  int
+	rules       config.RulesConfig
 	cachePath   string
 	upstreamURL string
 	mu          sync.RWMutex
 	cache       map[string]cacheEntry
 }
 
-func NewServer(maxAgeDays int, cachePath, upstreamURL string) *Server {
+func NewServer(rules config.RulesConfig, cachePath, upstreamURL string) *Server {
 	s := &Server{
-		maxAgeDays:  maxAgeDays,
+		rules:       rules,
 		cachePath:   cachePath,
 		upstreamURL: upstreamURL,
 		cache:       make(map[string]cacheEntry),
@@ -46,7 +47,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) ListenAndServe(port int) error {
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("[server] listening on %s (max_age_days=%d)", addr, s.maxAgeDays)
+	log.Printf("[server] listening on %s (max_age: enabled=%v min_days=%d)", addr, s.rules.MaxAge.Enabled, s.rules.MaxAge.MinDays)
 	srv := &http.Server{Addr: addr, Handler: s.Handler()}
 	return srv.ListenAndServe()
 }
@@ -71,33 +72,38 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	publishTime, err := s.fetchPublishTime(req.Module, req.Version)
-	if err != nil {
-		reason := fmt.Sprintf("failed to verify package age: %v", err)
-		log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
-		json.NewEncoder(w).Encode(checkapi.CheckResponse{
-			Status: checkapi.StatusBlocked,
-			Reason: reason,
-		})
-		return
+	// Max age check
+	if s.rules.MaxAge.Enabled {
+		publishTime, err := s.fetchPublishTime(req.Module, req.Version)
+		if err != nil {
+			reason := fmt.Sprintf("failed to verify package age: %v", err)
+			log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
+			json.NewEncoder(w).Encode(checkapi.CheckResponse{
+				Status: checkapi.StatusBlocked,
+				Reason: reason,
+			})
+			return
+		}
+
+		age := time.Since(publishTime)
+		maxAge := time.Duration(s.rules.MaxAge.MinDays) * 24 * time.Hour
+
+		if age < maxAge {
+			days := int(age.Hours() / 24)
+			reason := fmt.Sprintf("published %d days ago (minimum: %d days)", days, s.rules.MaxAge.MinDays)
+			log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
+			json.NewEncoder(w).Encode(checkapi.CheckResponse{
+				Status: checkapi.StatusBlocked,
+				Reason: reason,
+			})
+			return
+		}
 	}
 
-	age := time.Since(publishTime)
-	maxAge := time.Duration(s.maxAgeDays) * 24 * time.Hour
-
-	if age < maxAge {
-		days := int(age.Hours() / 24)
-		reason := fmt.Sprintf("published %d days ago (minimum: %d days)", days, s.maxAgeDays)
-		log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
-		json.NewEncoder(w).Encode(checkapi.CheckResponse{
-			Status: checkapi.StatusBlocked,
-			Reason: reason,
-		})
-		return
-	}
+	// Analysis check (placeholder — will be wired in Task 8)
 
 	s.addToCache(req.Module, req.Version)
-	log.Printf("[check] %s@%s → allowed (age: %d days)", req.Module, req.Version, int(age.Hours()/24))
+	log.Printf("[check] %s@%s → allowed", req.Module, req.Version)
 	json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
 }
 
