@@ -108,50 +108,7 @@ soa --go=false npm install foo   # don't intercept Go, only npm (future)
 
 ## Malware analysis
 
-`soa serve` can analyze packages for malware using an LLM. Two parallel checks run on every package:
-
-1. **Code analysis** — extracts source from the archive, sends it to an LLM to detect obfuscation, C2 patterns, exfiltration, and intent mismatch
-2. **Release analysis** — checks GitHub contributor history, release patterns, and dependency changes for signs of compromise
-
-Enable it with ollama (free, local):
-
-```bash
-# Start ollama with a model
-ollama pull llama3
-ollama serve
-```
-
-```yaml
-# ~/.config/soa/config.yaml
-server:
-  rules:
-    max_age:
-      enabled: true
-      min_days: 7
-    analysis:
-      enabled: true
-      provider: "ollama"
-      model: "llama3"
-```
-
-Or with OpenAI/Gemini free tiers:
-
-```yaml
-server:
-  rules:
-    analysis:
-      enabled: true
-      provider: "gemini"
-      api_key_env: "GEMINI_API_KEY"
-      model: "gemini-2.0-flash"
-```
-
-When analysis is enabled, you'll see progress in the spinner:
-
-```
-[soa] ⠋ scanning github.com/foo/bar@v1.2.3 [████░░░░ 45%]
-[soa] ✗ github.com/sketchy/lib@v0.0.1 blocked: init() executes outbound curl to hardcoded IP
-```
+`soa serve` can also send packages to an LLM for malware detection — code analysis + release metadata checks running in parallel. Off by default, enable it with a local [ollama](https://ollama.com) or a free-tier API (OpenAI, Gemini). See [docs/malware-analysis.md](docs/malware-analysis.md) for setup.
 
 ## FAQ
 
