@@ -22,6 +22,9 @@ func main() {
 		Flags: quicli.Flags{
 			{Name: "verbose", Default: false, Description: "show allowed packages (only blocked are shown by default)"},
 			{Name: "go", Default: true, Description: "intercept Go package downloads"},
+			{Name: "npm", Default: true, Description: "intercept npm package downloads"},
+			{Name: "pip", Default: true, Description: "intercept pip package downloads"},
+			{Name: "rubygems", Default: true, Description: "intercept RubyGems downloads"},
 			{Name: "port", Default: 0, Description: "port to listen on (overrides config)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"serve"}},
 		},
 		Function: proxyCmd,
@@ -96,9 +99,22 @@ func proxyCmd(cfg_parsed quicli.Config) {
 		os.Exit(1)
 	}
 
+	enableNpm := cfg_parsed.GetBoolFlag("npm")
+	enablePip := cfg_parsed.GetBoolFlag("pip")
+	enableRubyGems := cfg_parsed.GetBoolFlag("rubygems")
+
 	var managers []manager.Manager
 	if enableGo {
 		managers = append(managers, &manager.GolangManager{})
+	}
+	if enableNpm {
+		managers = append(managers, &manager.NpmManager{})
+	}
+	if enablePip {
+		managers = append(managers, &manager.PipManager{})
+	}
+	if enableRubyGems {
+		managers = append(managers, &manager.RubyGemsManager{})
 	}
 
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
