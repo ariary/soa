@@ -22,3 +22,10 @@ type Manager interface {
 	Parse(r *http.Request) (PackageRequest, error)
 	UpstreamURL(upstream string, r *http.Request) string
 }
+
+// ResponseRewriter is an optional interface that managers can implement to
+// transform upstream response bodies before sending them to the client.
+// Used by PipManager to rewrite download URLs in the PyPI simple index.
+type ResponseRewriter interface {
+	RewriteResponse(r *http.Request, body []byte, proxyAddr string) []byte
+}
