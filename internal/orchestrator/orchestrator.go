@@ -44,7 +44,7 @@ func Run(cfg config.Config, managers []manager.Manager, args []string, env []str
 	client := check.NewClient(cfg.CheckURL, cfg.CheckTimeout, cfg.PollInterval)
 	spinner := ui.NewSpinner(os.Stderr, !isTTY, isVerbose)
 
-	p := proxy.New(activeManagers, client, spinner)
+	p := proxy.New(activeManagers, client, spinner, proxyAddr)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

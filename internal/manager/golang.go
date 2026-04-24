@@ -49,7 +49,7 @@ func (g *GolangManager) Parse(r *http.Request) (PackageRequest, error) {
 	}
 
 	if rest == "list" {
-		return PackageRequest{Module: module, Type: "list"}, nil
+		return PackageRequest{Ecosystem: "go", Module: module, Type: "list"}, nil
 	}
 
 	lastDot := strings.LastIndex(rest, ".")
@@ -61,9 +61,11 @@ func (g *GolangManager) Parse(r *http.Request) (PackageRequest, error) {
 	typ := rest[lastDot+1:]
 
 	return PackageRequest{
-		Module:  module,
-		Version: version,
-		Type:    typ,
+		Ecosystem: "go",
+		Module:    module,
+		Version:   version,
+		Type:      typ,
+		Download:  typ == "zip",
 	}, nil
 }
 

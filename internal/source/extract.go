@@ -1,8 +1,11 @@
 package source
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
+	"fmt"
 	"io"
 	"path/filepath"
 	"sort"
@@ -17,17 +20,21 @@ type File struct {
 
 // allowedExtensions is the set of file extensions we keep.
 var allowedExtensions = map[string]bool{
-	".go":   true,
-	".js":   true,
-	".py":   true,
-	".rb":   true,
-	".sh":   true,
-	".c":    true,
-	".json": true,
-	".yaml": true,
-	".yml":  true,
-	".toml": true,
-	".mod":  true,
+	".go":      true,
+	".js":      true,
+	".ts":      true,
+	".tsx":     true,
+	".py":      true,
+	".rb":      true,
+	".gemspec": true,
+	".sh":      true,
+	".c":       true,
+	".json":    true,
+	".yaml":    true,
+	".yml":     true,
+	".toml":    true,
+	".cfg":     true,
+	".mod":     true,
 }
 
 // skippedDirs are directory path components that cause a file to be skipped.
@@ -94,8 +101,12 @@ func tier(f File) int {
 	name := filepath.Base(f.Path)
 	ext := filepath.Ext(f.Path)
 
-	// Tier 0: entry points
-	if name == "main.go" || name == "setup.py" || name == "package.json" || name == "Makefile" || ext == ".sh" {
+	// Tier 0: entry points and manifest files
+	if name == "main.go" || name == "setup.py" || name == "setup.cfg" ||
+		name == "package.json" || name == "Makefile" ||
+		name == "index.js" || name == "index.ts" ||
+		name == "__init__.py" || name == "pyproject.toml" ||
+		ext == ".sh" || ext == ".gemspec" {
 		return 0
 	}
 	if strings.Contains(f.Content, "func init()") {
@@ -140,4 +151,106 @@ func readZipFile(zf *zip.File) (string, error) {
 		return "", err
 	}
 	return string(data), nil
+}
+
+// Extract reads an archive in the given format and returns prioritized source files.
+// Supported formats: "zip", "tgz", "gem".
+func Extract(data []byte, format string, maxBytes int) ([]File, error) {
+	switch format {
+	case "zip":
+		return ExtractFiles(data, maxBytes)
+	case "tgz":
+		return extractTarGz(data, maxBytes)
+	case "gem":
+		return extractGem(data, maxBytes)
+	default:
+		return nil, fmt.Errorf("unsupported archive format: %s", format)
+	}
+}
+
+func extractTarGz(data []byte, maxBytes int) ([]File, error) {
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		return nil, err
+	}
+	defer gr.Close()
+
+	return extractTar(gr, maxBytes)
+}
+
+func extractTar(r io.Reader, maxBytes int) ([]File, error) {
+	tr := tar.NewReader(r)
+	var files []File
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if hdr.Typeflag != tar.TypeReg {
+			continue
+		}
+
+		if isSkippedDir(hdr.Name) {
+			continue
+		}
+
+		ext := filepath.Ext(hdr.Name)
+		if !allowedExtensions[ext] {
+			continue
+		}
+
+		content, err := io.ReadAll(tr)
+		if err != nil {
+			continue
+		}
+
+		files = append(files, File{Path: hdr.Name, Content: string(content)})
+	}
+
+	sort.SliceStable(files, func(i, j int) bool {
+		return tier(files[i]) < tier(files[j])
+	})
+
+	var result []File
+	totalBytes := 0
+	for i, f := range files {
+		size := len(f.Content)
+		if i > 0 && totalBytes+size > maxBytes {
+			break
+		}
+		result = append(result, f)
+		totalBytes += size
+	}
+
+	return result, nil
+}
+
+func extractGem(data []byte, maxBytes int) ([]File, error) {
+	tr := tar.NewReader(bytes.NewReader(data))
+
+	for {
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, err
+		}
+
+		if hdr.Name == "data.tar.gz" {
+			gr, err := gzip.NewReader(tr)
+			if err != nil {
+				return nil, fmt.Errorf("decompress data.tar.gz: %w", err)
+			}
+			defer gr.Close()
+			return extractTar(gr, maxBytes)
+		}
+	}
+
+	return nil, fmt.Errorf("data.tar.gz not found in gem")
 }

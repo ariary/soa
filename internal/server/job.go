@@ -13,25 +13,27 @@ import (
 
 // AnalysisJob tracks an in-flight analysis of a module version.
 type AnalysisJob struct {
-	ID       string
-	Module   string
-	Version  string
-	Status   string
-	Findings []analyzer.Finding
-	Summary  string
-	Done     chan struct{}
-	mu       sync.Mutex
+	ID        string
+	Ecosystem string
+	Module    string
+	Version   string
+	Status    string
+	Findings  []analyzer.Finding
+	Summary   string
+	Done      chan struct{}
+	mu        sync.Mutex
 }
 
 // createJob initialises a new AnalysisJob, stores it in the server's job map,
 // and returns it ready for runAnalysis.
-func (s *Server) createJob(module, version string) *AnalysisJob {
+func (s *Server) createJob(ecosystem, module, version string) *AnalysisJob {
 	job := &AnalysisJob{
-		ID:      fmt.Sprintf("%d", time.Now().UnixNano()),
-		Module:  module,
-		Version: version,
-		Status:  checkapi.StatusProcessing,
-		Done:    make(chan struct{}),
+		ID:        fmt.Sprintf("%d", time.Now().UnixNano()),
+		Ecosystem: ecosystem,
+		Module:    module,
+		Version:   version,
+		Status:    checkapi.StatusProcessing,
+		Done:      make(chan struct{}),
 	}
 	s.jobsMu.Lock()
 	s.jobs[job.ID] = job
@@ -63,8 +65,9 @@ func (s *Server) runAnalysis(job *AnalysisJob) {
 	for _, a := range s.analyzers {
 		go func(a analyzer.Analyzer) {
 			res, err := a.Analyze(ctx, analyzer.AnalysisRequest{
-				Module:  job.Module,
-				Version: job.Version,
+				Ecosystem: job.Ecosystem,
+				Module:    job.Module,
+				Version:   job.Version,
 			})
 			ch <- result{name: a.Name(), res: res, err: err}
 		}(a)

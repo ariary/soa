@@ -20,8 +20,9 @@ type AnalysisResult struct {
 
 // AnalysisRequest identifies the module and version to analyze.
 type AnalysisRequest struct {
-	Module  string
-	Version string
+	Ecosystem string
+	Module    string
+	Version   string
 }
 
 // Analyzer is the interface that all analysis backends must implement.

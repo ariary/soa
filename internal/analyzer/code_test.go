@@ -58,8 +58,9 @@ func TestCodeAnalyzer_Clean(t *testing.T) {
 		response: `{"block":false,"summary":"No malicious signals detected.","findings":[]}`,
 	}
 
-	ca := NewCodeAnalyzer(mock, srv.URL, 1<<20)
+	ca := NewCodeAnalyzer(mock, map[string]string{"go": srv.URL}, 1<<20)
 	result, err := ca.Analyze(context.Background(), AnalysisRequest{
+		Ecosystem: "go",
 		Module:  "mod",
 		Version: "v1.0.0",
 	})
@@ -112,8 +113,9 @@ func TestCodeAnalyzer_Malicious(t *testing.T) {
 		}`,
 	}
 
-	ca := NewCodeAnalyzer(mock, srv.URL, 1<<20)
+	ca := NewCodeAnalyzer(mock, map[string]string{"go": srv.URL}, 1<<20)
 	result, err := ca.Analyze(context.Background(), AnalysisRequest{
+		Ecosystem: "go",
 		Module:  "evil",
 		Version: "v0.1.0",
 	})
@@ -144,8 +146,9 @@ func TestCodeAnalyzer_InvalidLLMResponse(t *testing.T) {
 		response: "This is not JSON at all.",
 	}
 
-	ca := NewCodeAnalyzer(mock, srv.URL, 1<<20)
+	ca := NewCodeAnalyzer(mock, map[string]string{"go": srv.URL}, 1<<20)
 	_, err := ca.Analyze(context.Background(), AnalysisRequest{
+		Ecosystem: "go",
 		Module:  "mod",
 		Version: "v1.0.0",
 	})

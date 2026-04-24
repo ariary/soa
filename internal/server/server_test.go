@@ -35,7 +35,8 @@ func newTestServerWithVersions(t *testing.T, rules config.RulesConfig, upstreamT
 	t.Cleanup(upstream.Close)
 
 	cachePath := filepath.Join(t.TempDir(), "approved.json")
-	s := NewServer(rules, cachePath, upstream.URL)
+	upstreams := map[string]string{"go": upstream.URL}
+	s := NewServer(rules, cachePath, upstreams)
 	return s, httptest.NewServer(s.Handler())
 }
 
@@ -56,7 +57,7 @@ func TestCheckAllowed_OldPackage(t *testing.T) {
 	defer srv.Close()
 	_ = s
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -75,7 +76,7 @@ func TestCheckBlocked_NewPackage(t *testing.T) {
 	defer srv.Close()
 	_ = s
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -97,7 +98,7 @@ func TestCheckCacheHit(t *testing.T) {
 	defer srv.Close()
 	_ = s
 
-	req := checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"}
+	req := checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"}
 	body, _ := json.Marshal(req)
 
 	resp, _ := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
@@ -129,10 +130,10 @@ func TestCachePersistence(t *testing.T) {
 	defer upstream.Close()
 
 	rules := config.RulesConfig{MaxAge: config.MaxAgeRule{Enabled: true, MinDays: 7}}
-	s1 := NewServer(rules, cachePath, upstream.URL)
+	s1 := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	srv1 := httptest.NewServer(s1.Handler())
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, _ := http.Post(srv1.URL+"/check", "application/json", bytes.NewReader(body))
 	resp.Body.Close()
 	srv1.Close()
@@ -141,7 +142,7 @@ func TestCachePersistence(t *testing.T) {
 		t.Fatalf("cache file should exist: %v", err)
 	}
 
-	s2 := NewServer(rules, cachePath, upstream.URL)
+	s2 := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	if !s2.isCached("github.com/foo/bar", "v1.0.0") {
 		t.Error("expected cache entry to survive restart")
 	}
@@ -156,7 +157,7 @@ func TestMaxAgeDisabled_AllowsNewPackage(t *testing.T) {
 	_, srv := newTestServerWithRules(t, rules, time.Now().Add(-2*24*time.Hour))
 	defer srv.Close()
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -179,7 +180,7 @@ func TestBothRulesDisabled_Passthrough(t *testing.T) {
 	_, srv := newTestServerWithRules(t, rules, time.Now().Add(-1*time.Hour))
 	defer srv.Close()
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/brand-new/pkg", Version: "v0.0.1"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/brand-new/pkg", Version: "v0.0.1"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -217,7 +218,7 @@ func TestAnalysisEnabled_ReturnsProcessing(t *testing.T) {
 		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: false, Summary: "clean"}},
 	})
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -246,7 +247,7 @@ func TestPollJobStatus(t *testing.T) {
 		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: false, Summary: "clean"}},
 	})
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -295,7 +296,7 @@ func TestPollJobBlocked(t *testing.T) {
 		&mockTestAnalyzer{result: analyzer.AnalysisResult{Block: true, Summary: "suspicious code found"}},
 	})
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -359,7 +360,7 @@ func TestMinVersions_BlocksLowCount(t *testing.T) {
 	_, srv := newTestServerWithVersions(t, rules, time.Now().AddDate(0, -6, 0), 1)
 	defer srv.Close()
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/new/pkg", Version: "v0.0.1"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/new/pkg", Version: "v0.0.1"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -383,7 +384,7 @@ func TestMinVersions_AllowsExactCount(t *testing.T) {
 	_, srv := newTestServerWithVersions(t, rules, time.Now().AddDate(0, -6, 0), 2)
 	defer srv.Close()
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -404,7 +405,7 @@ func TestMinVersions_Disabled(t *testing.T) {
 	_, srv := newTestServerWithVersions(t, rules, time.Now().AddDate(0, -6, 0), 1)
 	defer srv.Close()
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/new/pkg", Version: "v0.0.1"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/new/pkg", Version: "v0.0.1"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)
@@ -435,12 +436,12 @@ func TestMinVersions_FailClosed(t *testing.T) {
 	rules := config.RulesConfig{
 		MinVersions: config.MinVersionsRule{Enabled: true, Count: 2},
 	}
-	s := NewServer(rules, cachePath, upstream.URL)
+	s := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	_ = s
 
-	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
 	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
 	if err != nil {
 		t.Fatal(err)

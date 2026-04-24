@@ -29,7 +29,7 @@ func TestProxyForwardsNonZipTransparently(t *testing.T) {
 	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
 	spinner := ui.NewSpinner(io.Discard, true, false)
 
-	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner)
+	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner, "http://localhost:0")
 	srv := httptest.NewServer(p)
 	defer srv.Close()
 	defer spinner.Shutdown()
@@ -63,7 +63,7 @@ func TestProxyChecksZipAndAllows(t *testing.T) {
 	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
 	spinner := ui.NewSpinner(io.Discard, true, false)
 
-	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner)
+	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner, "http://localhost:0")
 	srv := httptest.NewServer(p)
 	defer srv.Close()
 	defer spinner.Shutdown()
@@ -100,7 +100,7 @@ func TestProxyChecksZipAndBlocks(t *testing.T) {
 	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
 	spinner := ui.NewSpinner(io.Discard, true, false)
 
-	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner)
+	p := New([]ActiveManager{{Manager: gm, Upstream: upstream.URL}}, client, spinner, "http://localhost:0")
 	srv := httptest.NewServer(p)
 	defer srv.Close()
 	defer spinner.Shutdown()
@@ -117,7 +117,7 @@ func TestProxyChecksZipAndBlocks(t *testing.T) {
 
 func TestProxyUnmatchedRequestReturns404(t *testing.T) {
 	spinner := ui.NewSpinner(io.Discard, true, false)
-	p := New([]ActiveManager{}, nil, spinner)
+	p := New([]ActiveManager{}, nil, spinner, "http://localhost:0")
 	srv := httptest.NewServer(p)
 	defer srv.Close()
 	defer spinner.Shutdown()
@@ -129,5 +129,110 @@ func TestProxyUnmatchedRequestReturns404(t *testing.T) {
 	resp.Body.Close()
 	if resp.StatusCode != 404 {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestNpmTarball_Allowed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("fake-tarball-content"))
+	}))
+	defer upstream.Close()
+
+	checkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req checkapi.CheckRequest
+		json.NewDecoder(r.Body).Decode(&req)
+		if req.Ecosystem != "npm" {
+			t.Errorf("expected ecosystem npm, got %s", req.Ecosystem)
+		}
+		json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
+	}))
+	defer checkSrv.Close()
+
+	npm := &manager.NpmManager{}
+	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true, false)
+
+	p := New([]ActiveManager{{Manager: npm, Upstream: upstream.URL}}, client, spinner, "http://localhost:0")
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/npm/lodash/-/lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
+	}
+	if string(body) != "fake-tarball-content" {
+		t.Errorf("expected upstream content, got %s", string(body))
+	}
+}
+
+func TestNpmTarball_Blocked(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte("should-not-reach"))
+	}))
+	defer upstream.Close()
+
+	checkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(checkapi.CheckResponse{
+			Status: checkapi.StatusBlocked,
+			Reason: "too new",
+		})
+	}))
+	defer checkSrv.Close()
+
+	npm := &manager.NpmManager{}
+	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true, false)
+
+	p := New([]ActiveManager{{Manager: npm, Upstream: upstream.URL}}, client, spinner, "http://localhost:0")
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/npm/lodash/-/lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("expected 403, got %d", resp.StatusCode)
+	}
+}
+
+func TestNpmMetadata_Passthrough(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"name":"lodash","versions":{}}`))
+	}))
+	defer upstream.Close()
+
+	checkSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Error("check server should not be called for metadata requests")
+	}))
+	defer checkSrv.Close()
+
+	npm := &manager.NpmManager{}
+	client := check.NewClient(checkSrv.URL, 5*time.Second, 100*time.Millisecond)
+	spinner := ui.NewSpinner(io.Discard, true, false)
+
+	p := New([]ActiveManager{{Manager: npm, Upstream: upstream.URL}}, client, spinner, "http://localhost:0")
+	srv := httptest.NewServer(p)
+	defer srv.Close()
+	defer spinner.Shutdown()
+
+	resp, err := http.Get(srv.URL + "/npm/lodash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		t.Errorf("expected 200, got %d", resp.StatusCode)
 	}
 }

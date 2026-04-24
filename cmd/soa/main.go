@@ -22,6 +22,9 @@ func main() {
 		Flags: quicli.Flags{
 			{Name: "verbose", Default: false, Description: "show allowed packages (only blocked are shown by default)"},
 			{Name: "go", Default: true, Description: "intercept Go package downloads"},
+			{Name: "npm", Default: true, Description: "intercept npm package downloads"},
+			{Name: "pip", Default: true, Description: "intercept pip package downloads"},
+			{Name: "rubygems", Default: true, Description: "intercept RubyGems downloads"},
 			{Name: "port", Default: 0, Description: "port to listen on (overrides config)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"serve"}},
 		},
 		Function: proxyCmd,
@@ -52,8 +55,15 @@ func serveCmd(cfg_parsed quicli.Config) {
 		os.MkdirAll(dir, 0755)
 	}
 
+	upstreams := map[string]string{
+		"go":       "https://proxy.golang.org",
+		"npm":      "https://registry.npmjs.org",
+		"pip":      "https://pypi.org",
+		"rubygems": "https://rubygems.org",
+	}
+
 	fmt.Fprintf(os.Stderr, "[soa] check server starting on :%d\n", cfg.Server.Port)
-	s := server.NewServer(cfg.Server.Rules, expandedCachePath, "https://proxy.golang.org")
+	s := server.NewServer(cfg.Server.Rules, expandedCachePath, upstreams)
 
 	if cfg.Server.Rules.Analysis.Enabled {
 		llm, err := provider.New(cfg.Server.Rules.Analysis)
@@ -65,8 +75,8 @@ func serveCmd(cfg_parsed quicli.Config) {
 		if cfg.Server.Rules.Analysis.GitHubTokenEnv != "" {
 			githubToken = os.Getenv(cfg.Server.Rules.Analysis.GitHubTokenEnv)
 		}
-		codeAnalyzer := analyzer.NewCodeAnalyzer(llm, "https://proxy.golang.org", cfg.Server.Rules.Analysis.MaxSourceBytes)
-		releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", githubToken, "https://proxy.golang.org")
+		codeAnalyzer := analyzer.NewCodeAnalyzer(llm, upstreams, cfg.Server.Rules.Analysis.MaxSourceBytes)
+		releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", githubToken, upstreams)
 		s.SetAnalyzers([]analyzer.Analyzer{codeAnalyzer, releaseAnalyzer})
 		fmt.Fprintf(os.Stderr, "[soa] analysis enabled (provider: %s, model: %s)\n", llm.Name(), cfg.Server.Rules.Analysis.Model)
 	}
@@ -89,9 +99,22 @@ func proxyCmd(cfg_parsed quicli.Config) {
 		os.Exit(1)
 	}
 
+	enableNpm := cfg_parsed.GetBoolFlag("npm")
+	enablePip := cfg_parsed.GetBoolFlag("pip")
+	enableRubyGems := cfg_parsed.GetBoolFlag("rubygems")
+
 	var managers []manager.Manager
 	if enableGo {
 		managers = append(managers, &manager.GolangManager{})
+	}
+	if enableNpm {
+		managers = append(managers, &manager.NpmManager{})
+	}
+	if enablePip {
+		managers = append(managers, &manager.PipManager{})
+	}
+	if enableRubyGems {
+		managers = append(managers, &manager.RubyGemsManager{})
 	}
 
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))

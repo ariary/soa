@@ -19,18 +19,20 @@ type ActiveManager struct {
 }
 
 type Proxy struct {
-	managers []ActiveManager
-	client   *check.Client
-	spinner  *ui.Spinner
-	mux      *http.ServeMux
+	managers  []ActiveManager
+	client    *check.Client
+	spinner   *ui.Spinner
+	mux       *http.ServeMux
+	proxyAddr string
 }
 
-func New(managers []ActiveManager, client *check.Client, spinner *ui.Spinner) *Proxy {
+func New(managers []ActiveManager, client *check.Client, spinner *ui.Spinner, proxyAddr string) *Proxy {
 	p := &Proxy{
-		managers: managers,
-		client:   client,
-		spinner:  spinner,
-		mux:      http.NewServeMux(),
+		managers:  managers,
+		client:    client,
+		spinner:   spinner,
+		mux:       http.NewServeMux(),
+		proxyAddr: proxyAddr,
 	}
 	p.mux.HandleFunc("/", p.handle)
 	return p
@@ -82,7 +84,11 @@ func (p *Proxy) handle(w http.ResponseWriter, r *http.Request) {
 		}
 
 		upstreamURL := am.Manager.UpstreamURL(am.Upstream, r)
-		p.forward(w, r, upstreamURL)
+		if rw, ok := am.Manager.(manager.ResponseRewriter); ok {
+			p.forwardWithRewrite(w, r, upstreamURL, rw)
+		} else {
+			p.forward(w, r, upstreamURL)
+		}
 		return
 	}
 
@@ -93,8 +99,9 @@ func (p *Proxy) checkPackage(ctx context.Context, w http.ResponseWriter, pkg man
 	p.spinner.Start(pkg.Module, pkg.Version)
 
 	resp, err := p.client.CheckWithProgress(ctx, checkapi.CheckRequest{
-		Module:  pkg.Module,
-		Version: pkg.Version,
+		Ecosystem: pkg.Ecosystem,
+		Module:    pkg.Module,
+		Version:   pkg.Version,
 	}, func(progress float64) {
 		p.spinner.SetProgress(pkg.Module, progress)
 	})
@@ -113,6 +120,38 @@ func (p *Proxy) checkPackage(ctx context.Context, w http.ResponseWriter, pkg man
 
 	p.spinner.Stop(pkg.Module, true, "")
 	return true
+}
+
+func (p *Proxy) forwardWithRewrite(w http.ResponseWriter, r *http.Request, upstreamURL string, rw manager.ResponseRewriter) {
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, r.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+
+	body = rw.RewriteResponse(r, body, p.proxyAddr)
+
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", len(body)))
+	w.WriteHeader(resp.StatusCode)
+	w.Write(body)
 }
 
 func (p *Proxy) forward(w http.ResponseWriter, r *http.Request, upstreamURL string) {

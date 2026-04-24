@@ -118,17 +118,17 @@ func TestEndToEnd_AnalysisPipeline(t *testing.T) {
 		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
 		Analysis: config.AnalysisRule{Enabled: true, Provider: "ollama", Model: "llama3", MaxSourceBytes: 524288},
 	}
-	s := server.NewServer(rules, cachePath, upstream.URL)
+	s := server.NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	llm := provider.NewOllama(llmSrv.URL, "llama3")
-	codeAnalyzer := analyzer.NewCodeAnalyzer(llm, upstream.URL, 524288)
-	releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", "", upstream.URL)
+	codeAnalyzer := analyzer.NewCodeAnalyzer(llm, map[string]string{"go": upstream.URL}, 524288)
+	releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", "", map[string]string{"go": upstream.URL})
 	s.SetAnalyzers([]analyzer.Analyzer{codeAnalyzer, releaseAnalyzer})
 
 	ts := httptest.NewServer(s.Handler())
 	defer ts.Close()
 
 	// 4. POST /check
-	reqBody, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/fake/mod", Version: "v1.0.0"})
+	reqBody, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/fake/mod", Version: "v1.0.0"})
 	resp, err := http.Post(ts.URL+"/check", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("POST /check failed: %v", err)

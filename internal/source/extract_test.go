@@ -1,8 +1,10 @@
 package source
 
 import (
+	"archive/tar"
 	"archive/zip"
 	"bytes"
+	"compress/gzip"
 	"strings"
 	"testing"
 )
@@ -118,4 +120,93 @@ func keys(m map[string]bool) []string {
 		ks = append(ks, k)
 	}
 	return ks
+}
+
+func createTestTarGz(t *testing.T, files map[string]string) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	gw := gzip.NewWriter(&buf)
+	tw := tar.NewWriter(gw)
+	for path, content := range files {
+		hdr := &tar.Header{
+			Name: path,
+			Mode: 0600,
+			Size: int64(len(content)),
+		}
+		if err := tw.WriteHeader(hdr); err != nil {
+			t.Fatalf("failed to write tar header %s: %v", path, err)
+		}
+		if _, err := tw.Write([]byte(content)); err != nil {
+			t.Fatalf("failed to write tar entry %s: %v", path, err)
+		}
+	}
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("failed to close gzip writer: %v", err)
+	}
+	return buf.Bytes()
+}
+
+func TestExtract_TarGz(t *testing.T) {
+	data := createTestTarGz(t, map[string]string{
+		"package/index.js":    "module.exports = {};\n",
+		"package/lib/main.js": "const http = require('http');\n",
+		"package/README.md":   "# my-package\n",
+	})
+
+	files, err := Extract(data, "tgz", 1<<20)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	paths := make(map[string]bool)
+	for _, f := range files {
+		paths[f.Path] = true
+	}
+
+	if !paths["package/index.js"] {
+		t.Error("expected index.js to be included")
+	}
+	if !paths["package/lib/main.js"] {
+		t.Error("expected lib/main.js to be included")
+	}
+	if paths["package/README.md"] {
+		t.Error("expected README.md to be excluded")
+	}
+}
+
+func TestExtract_Zip(t *testing.T) {
+	data := createTestZip(t, map[string]string{
+		"mod@v1/main.go": "package main\n\nfunc main() {}\n",
+	})
+
+	files, err := Extract(data, "zip", 1<<20)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	if len(files) != 1 || files[0].Path != "mod@v1/main.go" {
+		t.Errorf("unexpected files: %v", files)
+	}
+}
+
+func TestExtract_TarGz_Tiering(t *testing.T) {
+	data := createTestTarGz(t, map[string]string{
+		"package/lib/utils.js": "function utils() {}\n",
+		"package/index.js":     "const cp = require('child_process');\n",
+	})
+
+	files, err := Extract(data, "tgz", 100)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	if len(files) == 0 {
+		t.Fatal("expected at least one file")
+	}
+	if files[0].Path != "package/index.js" {
+		t.Errorf("expected first file to be index.js, got %s", files[0].Path)
+	}
 }

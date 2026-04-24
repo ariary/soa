@@ -65,8 +65,9 @@ func TestReleaseAnalyzer_Clean(t *testing.T) {
 		response: `{"block":false,"summary":"No suspicious release signals detected.","findings":[]}`,
 	}
 
-	ra := NewReleaseAnalyzer(mock, ghSrv.URL, "gh-token", proxySrv.URL)
+	ra := NewReleaseAnalyzer(mock, ghSrv.URL, "gh-token", map[string]string{"go": proxySrv.URL})
 	result, err := ra.Analyze(context.Background(), AnalysisRequest{
+		Ecosystem: "go",
 		Module:  "github.com/example/repo",
 		Version: "v1.0.1",
 	})
@@ -108,8 +109,9 @@ func TestReleaseAnalyzer_NoGitHub(t *testing.T) {
 	}
 
 	// No GitHub base URL or token — gh client should be nil.
-	ra := NewReleaseAnalyzer(mock, "", "", proxySrv.URL)
+	ra := NewReleaseAnalyzer(mock, "", "", map[string]string{"go": proxySrv.URL})
 	result, err := ra.Analyze(context.Background(), AnalysisRequest{
+		Ecosystem: "go",
 		Module:  "example.com/mod",
 		Version: "v0.2.0",
 	})
