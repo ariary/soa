@@ -121,7 +121,7 @@ func TestEndToEnd_AnalysisPipeline(t *testing.T) {
 	s := server.NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	llm := provider.NewOllama(llmSrv.URL, "llama3")
 	codeAnalyzer := analyzer.NewCodeAnalyzer(llm, map[string]string{"go": upstream.URL}, 524288)
-	releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", "", upstream.URL)
+	releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", "", map[string]string{"go": upstream.URL})
 	s.SetAnalyzers([]analyzer.Analyzer{codeAnalyzer, releaseAnalyzer})
 
 	ts := httptest.NewServer(s.Handler())
