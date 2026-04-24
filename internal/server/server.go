@@ -61,7 +61,7 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) ListenAndServe(port int) error {
 	addr := fmt.Sprintf(":%d", port)
-	log.Printf("[server] listening on %s (max_age: enabled=%v min_days=%d)", addr, s.rules.MaxAge.Enabled, s.rules.MaxAge.MinDays)
+	log.Printf("[server] listening on %s (max_age: enabled=%v min_days=%d, min_versions: enabled=%v count=%d)", addr, s.rules.MaxAge.Enabled, s.rules.MaxAge.MinDays, s.rules.MinVersions.Enabled, s.rules.MinVersions.Count)
 	srv := &http.Server{Addr: addr, Handler: s.Handler()}
 	return srv.ListenAndServe()
 }
@@ -84,6 +84,30 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[check] %s@%s → allowed (cached)", req.Module, req.Version)
 		json.NewEncoder(w).Encode(checkapi.CheckResponse{Status: checkapi.StatusAllowed})
 		return
+	}
+
+	// Min versions check
+	if s.rules.MinVersions.Enabled {
+		versions, err := s.fetchVersionList(req.Module)
+		if err != nil {
+			reason := fmt.Sprintf("failed to fetch version list: %v", err)
+			log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
+			json.NewEncoder(w).Encode(checkapi.CheckResponse{
+				Status: checkapi.StatusBlocked,
+				Reason: reason,
+			})
+			return
+		}
+
+		if len(versions) < s.rules.MinVersions.Count {
+			reason := fmt.Sprintf("module has %d version(s) (minimum: %d)", len(versions), s.rules.MinVersions.Count)
+			log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
+			json.NewEncoder(w).Encode(checkapi.CheckResponse{
+				Status: checkapi.StatusBlocked,
+				Reason: reason,
+			})
+			return
+		}
 	}
 
 	// Max age check
@@ -173,6 +197,30 @@ func (s *Server) fetchPublishTime(module, version string) (time.Time, error) {
 		return time.Time{}, fmt.Errorf("decode .info: %w", err)
 	}
 	return info.Time, nil
+}
+
+func (s *Server) fetchVersionList(module string) ([]string, error) {
+	url := fmt.Sprintf("%s/%s/@v/list", s.upstreamURL, module)
+	resp, err := http.Get(url)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	text := strings.TrimSpace(string(body))
+	if text == "" {
+		return nil, nil
+	}
+	return strings.Split(text, "\n"), nil
 }
 
 func cacheKey(module, version string) string {
