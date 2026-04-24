@@ -118,7 +118,7 @@ func TestEndToEnd_AnalysisPipeline(t *testing.T) {
 		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
 		Analysis: config.AnalysisRule{Enabled: true, Provider: "ollama", Model: "llama3", MaxSourceBytes: 524288},
 	}
-	s := server.NewServer(rules, cachePath, upstream.URL)
+	s := server.NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	llm := provider.NewOllama(llmSrv.URL, "llama3")
 	codeAnalyzer := analyzer.NewCodeAnalyzer(llm, upstream.URL, 524288)
 	releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", "", upstream.URL)

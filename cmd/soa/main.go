@@ -53,7 +53,7 @@ func serveCmd(cfg_parsed quicli.Config) {
 	}
 
 	fmt.Fprintf(os.Stderr, "[soa] check server starting on :%d\n", cfg.Server.Port)
-	s := server.NewServer(cfg.Server.Rules, expandedCachePath, "https://proxy.golang.org")
+	s := server.NewServer(cfg.Server.Rules, expandedCachePath, map[string]string{"go": "https://proxy.golang.org"})
 
 	if cfg.Server.Rules.Analysis.Enabled {
 		llm, err := provider.New(cfg.Server.Rules.Analysis)

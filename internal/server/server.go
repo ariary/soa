@@ -3,7 +3,6 @@ package server
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"log"
 	"net/http"
 	"os"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/ariary/soa/internal/analyzer"
 	"github.com/ariary/soa/internal/config"
+	"github.com/ariary/soa/internal/registry"
 	"github.com/ariary/soa/pkg/checkapi"
 )
 
@@ -23,23 +23,23 @@ type cacheEntry struct {
 }
 
 type Server struct {
-	rules       config.RulesConfig
-	cachePath   string
-	upstreamURL string
-	mu          sync.RWMutex
-	cache       map[string]cacheEntry
-	analyzers   []analyzer.Analyzer
-	jobs        map[string]*AnalysisJob
-	jobsMu      sync.RWMutex
+	rules     config.RulesConfig
+	cachePath string
+	upstreams map[string]string
+	mu        sync.RWMutex
+	cache     map[string]cacheEntry
+	analyzers []analyzer.Analyzer
+	jobs      map[string]*AnalysisJob
+	jobsMu    sync.RWMutex
 }
 
-func NewServer(rules config.RulesConfig, cachePath, upstreamURL string) *Server {
+func NewServer(rules config.RulesConfig, cachePath string, upstreams map[string]string) *Server {
 	s := &Server{
-		rules:       rules,
-		cachePath:   cachePath,
-		upstreamURL: upstreamURL,
-		cache:       make(map[string]cacheEntry),
-		jobs:        make(map[string]*AnalysisJob),
+		rules:     rules,
+		cachePath: cachePath,
+		upstreams: upstreams,
+		cache:     make(map[string]cacheEntry),
+		jobs:      make(map[string]*AnalysisJob),
 	}
 	s.loadCache()
 	s.startJobCleanup()
@@ -78,7 +78,12 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	log.Printf("[check] %s@%s", req.Module, req.Version)
+	ecosystem := req.Ecosystem
+	if ecosystem == "" {
+		ecosystem = "go"
+	}
+
+	log.Printf("[check] [%s] %s@%s", ecosystem, req.Module, req.Version)
 
 	if s.isCached(req.Module, req.Version) {
 		log.Printf("[check] %s@%s → allowed (cached)", req.Module, req.Version)
@@ -88,7 +93,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 	// Min versions check
 	if s.rules.MinVersions.Enabled {
-		versions, err := s.fetchVersionList(req.Module)
+		versions, err := registry.FetchVersionList(s.upstreams, ecosystem, req.Module)
 		if err != nil {
 			reason := fmt.Sprintf("failed to fetch version list: %v", err)
 			log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
@@ -112,7 +117,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 	// Max age check
 	if s.rules.MaxAge.Enabled {
-		publishTime, err := s.fetchPublishTime(req.Module, req.Version)
+		publishTime, err := registry.FetchPublishTime(s.upstreams, ecosystem, req.Module, req.Version)
 		if err != nil {
 			reason := fmt.Sprintf("failed to verify package age: %v", err)
 			log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
@@ -140,7 +145,7 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 	// Analysis check
 	if s.rules.Analysis.Enabled && len(s.analyzers) > 0 {
-		job := s.createJob(req.Module, req.Version)
+		job := s.createJob(ecosystem, req.Module, req.Version)
 		go s.runAnalysis(job)
 		log.Printf("[check] %s@%s → processing (job %s)", req.Module, req.Version, job.ID)
 		json.NewEncoder(w).Encode(checkapi.CheckResponse{
@@ -174,53 +179,6 @@ func (s *Server) handlePollJob(w http.ResponseWriter, r *http.Request) {
 	}
 	job.mu.Unlock()
 	json.NewEncoder(w).Encode(resp)
-}
-
-func (s *Server) fetchPublishTime(module, version string) (time.Time, error) {
-	url := fmt.Sprintf("%s/%s/@v/%s.info", s.upstreamURL, module, version)
-	resp, err := http.Get(url)
-	if err != nil {
-		return time.Time{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return time.Time{}, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	var info struct {
-		Version string    `json:"Version"`
-		Time    time.Time `json:"Time"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&info); err != nil {
-		return time.Time{}, fmt.Errorf("decode .info: %w", err)
-	}
-	return info.Time, nil
-}
-
-func (s *Server) fetchVersionList(module string) ([]string, error) {
-	url := fmt.Sprintf("%s/%s/@v/list", s.upstreamURL, module)
-	resp, err := http.Get(url)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("upstream returned %d: %s", resp.StatusCode, string(body))
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	text := strings.TrimSpace(string(body))
-	if text == "" {
-		return nil, nil
-	}
-	return strings.Split(text, "\n"), nil
 }
 
 func cacheKey(module, version string) string {

@@ -35,7 +35,8 @@ func newTestServerWithVersions(t *testing.T, rules config.RulesConfig, upstreamT
 	t.Cleanup(upstream.Close)
 
 	cachePath := filepath.Join(t.TempDir(), "approved.json")
-	s := NewServer(rules, cachePath, upstream.URL)
+	upstreams := map[string]string{"go": upstream.URL}
+	s := NewServer(rules, cachePath, upstreams)
 	return s, httptest.NewServer(s.Handler())
 }
 
@@ -129,7 +130,7 @@ func TestCachePersistence(t *testing.T) {
 	defer upstream.Close()
 
 	rules := config.RulesConfig{MaxAge: config.MaxAgeRule{Enabled: true, MinDays: 7}}
-	s1 := NewServer(rules, cachePath, upstream.URL)
+	s1 := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	srv1 := httptest.NewServer(s1.Handler())
 
 	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
@@ -141,7 +142,7 @@ func TestCachePersistence(t *testing.T) {
 		t.Fatalf("cache file should exist: %v", err)
 	}
 
-	s2 := NewServer(rules, cachePath, upstream.URL)
+	s2 := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	if !s2.isCached("github.com/foo/bar", "v1.0.0") {
 		t.Error("expected cache entry to survive restart")
 	}
@@ -435,7 +436,7 @@ func TestMinVersions_FailClosed(t *testing.T) {
 	rules := config.RulesConfig{
 		MinVersions: config.MinVersionsRule{Enabled: true, Count: 2},
 	}
-	s := NewServer(rules, cachePath, upstream.URL)
+	s := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
 	srv := httptest.NewServer(s.Handler())
 	defer srv.Close()
 	_ = s
