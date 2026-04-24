@@ -53,16 +53,17 @@ This is the highest-signal indicator. A new dependency added in a patch bump fro
 
 ---
 
-## 4. Go Proxy Cache vs Git Tag Divergence
+## 4. Registry Cache vs VCS Tag Divergence
 
-For Go modules, the Go module proxy caches module source at the time of first fetch. Attackers can publish a version, get it cached, then rewrite the git tag to point to clean code.
+Package registries (Go module proxy, npm, PyPI, RubyGems) cache package content at publish time. Attackers can publish a version, get it cached, then rewrite the git tag to point to clean code — making the repository appear safe while the registry serves the malicious version.
 
 Signals to check:
-- **Proxy-cached source code differs from current git tag content:** The version served by proxy.golang.org does not match what the git tag currently points to
+- **Registry-cached source code differs from current git tag content:** The version served by the registry does not match what the git tag currently points to
 - **Git tag was rewritten (force-pushed) after initial publication**
-- **The go.sum hash for a module version changed** between fetches
+- **Integrity hash for a package version changed** between fetches (go.sum, npm integrity, PyPI hash)
+- **npm: package published with --ignore-scripts** or with modified install scripts compared to the git source
 
-This is the boltdb-go/bolt attack pattern (2025). Any divergence between proxy-cached and git-tag content is CRITICAL.
+This is the boltdb-go/bolt attack pattern (2025, Go) and similar to npm token theft attacks. Any divergence between registry-cached and git-tag content is CRITICAL.
 
 ---
 
@@ -144,8 +145,8 @@ If the release metadata shows no suspicious signals, return:
 Be precise. Cite specific metadata fields, version numbers, timestamps, and account names as evidence. Do not hallucinate findings — only report what is actually present in the provided metadata.`
 
 // ReleaseUserPrompt builds the user message for release metadata analysis
-// given the module name, version, and the serialized release metadata.
-func ReleaseUserPrompt(module, version, metadata string) string {
-	return "Package: " + module + "@" + version + "\n\n" +
+// given the ecosystem, package name, version, and the serialized release metadata.
+func ReleaseUserPrompt(ecosystem, module, version, metadata string) string {
+	return "Ecosystem: " + ecosystem + "\nPackage: " + module + "@" + version + "\n\n" +
 		"## Release metadata\n" + metadata
 }

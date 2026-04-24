@@ -14,8 +14,8 @@ import (
 	"github.com/ariary/soa/internal/source"
 )
 
-// CodeAnalyzer uses an LLM to analyze the source code of a Go module for
-// supply-chain security threats.
+// CodeAnalyzer uses an LLM to analyze the source code of a package for
+// supply-chain security threats. Supports Go, npm, pip, and RubyGems ecosystems.
 type CodeAnalyzer struct {
 	llm            provider.Provider
 	upstreams      map[string]string

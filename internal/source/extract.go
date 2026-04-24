@@ -20,17 +20,21 @@ type File struct {
 
 // allowedExtensions is the set of file extensions we keep.
 var allowedExtensions = map[string]bool{
-	".go":   true,
-	".js":   true,
-	".py":   true,
-	".rb":   true,
-	".sh":   true,
-	".c":    true,
-	".json": true,
-	".yaml": true,
-	".yml":  true,
-	".toml": true,
-	".mod":  true,
+	".go":      true,
+	".js":      true,
+	".ts":      true,
+	".tsx":     true,
+	".py":      true,
+	".rb":      true,
+	".gemspec": true,
+	".sh":      true,
+	".c":       true,
+	".json":    true,
+	".yaml":    true,
+	".yml":     true,
+	".toml":    true,
+	".cfg":     true,
+	".mod":     true,
 }
 
 // skippedDirs are directory path components that cause a file to be skipped.
@@ -97,10 +101,12 @@ func tier(f File) int {
 	name := filepath.Base(f.Path)
 	ext := filepath.Ext(f.Path)
 
-	// Tier 0: entry points
-	if name == "main.go" || name == "setup.py" || name == "package.json" ||
-		name == "Makefile" || name == "index.js" || name == "__init__.py" ||
-		ext == ".sh" {
+	// Tier 0: entry points and manifest files
+	if name == "main.go" || name == "setup.py" || name == "setup.cfg" ||
+		name == "package.json" || name == "Makefile" ||
+		name == "index.js" || name == "index.ts" ||
+		name == "__init__.py" || name == "pyproject.toml" ||
+		ext == ".sh" || ext == ".gemspec" {
 		return 0
 	}
 	if strings.Contains(f.Content, "func init()") {

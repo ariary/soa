@@ -51,7 +51,7 @@ func (ra *ReleaseAnalyzer) Analyze(ctx context.Context, req AnalysisRequest) (An
 
 	llmReq := provider.Request{
 		SystemPrompt: prompt.ReleaseSystemPrompt,
-		UserPrompt:   prompt.ReleaseUserPrompt(req.Module, req.Version, metadata),
+		UserPrompt:   prompt.ReleaseUserPrompt(req.Ecosystem, req.Module, req.Version, metadata),
 		MaxTokens:    4096,
 	}
 
@@ -290,9 +290,16 @@ func (ra *ReleaseAnalyzer) collectPipMetadata(ctx context.Context, module, versi
 		sb.WriteByte('\n')
 	}
 
+	// Compute previous version for GitHub compare
+	pipVersions := make([]string, 0, len(pkg.Releases))
+	for v := range pkg.Releases {
+		pipVersions = append(pipVersions, v)
+	}
+	pipPrevVersion := findPreviousVersion(pipVersions, version)
+
 	// GitHub from project URLs
 	owner, repo := parsePipGitHubURL(pkg.Info.ProjectURLs)
-	ra.appendGitHubData(ctx, &sb, owner, repo, "", version)
+	ra.appendGitHubData(ctx, &sb, owner, repo, pipPrevVersion, version)
 
 	return sb.String(), nil
 }
@@ -309,6 +316,7 @@ func (ra *ReleaseAnalyzer) collectRubyGemsMetadata(ctx context.Context, module, 
 	sb.WriteString("## Registry Data (RubyGems)\n\n")
 
 	// Fetch version list
+	gemPrevVersion := ""
 	versionsURL := fmt.Sprintf("%s/api/v1/versions/%s.json", base, module)
 	versionsBody, err := ra.httpGet(ctx, versionsURL)
 	if err != nil {
@@ -321,10 +329,13 @@ func (ra *ReleaseAnalyzer) collectRubyGemsMetadata(ctx context.Context, module, 
 		}
 		if json.Unmarshal([]byte(versionsBody), &gems) == nil {
 			sb.WriteString("### Available versions\n")
+			gemVersions := make([]string, 0, len(gems))
 			for _, g := range gems {
 				sb.WriteString(fmt.Sprintf("- %s: published %s by %s\n", g.Number, g.CreatedAt, g.Authors))
+				gemVersions = append(gemVersions, g.Number)
 			}
 			sb.WriteByte('\n')
+			gemPrevVersion = findPreviousVersion(gemVersions, version)
 		}
 	}
 
@@ -357,7 +368,7 @@ func (ra *ReleaseAnalyzer) collectRubyGemsMetadata(ctx context.Context, module, 
 
 			// GitHub from source_code_uri
 			owner, repo := parseGenericGitHubURL(gem.SourceCodeURI)
-			ra.appendGitHubData(ctx, &sb, owner, repo, "", version)
+			ra.appendGitHubData(ctx, &sb, owner, repo, gemPrevVersion, version)
 		}
 	}
 
