@@ -90,7 +90,7 @@ func archiveFormat(ecosystem string) string {
 func (ca *CodeAnalyzer) fetchArchive(ctx context.Context, ecosystem, module, version string) ([]byte, error) {
 	base, ok := ca.upstreams[ecosystem]
 	if !ok {
-		base = ca.upstreams["go"]
+		return nil, fmt.Errorf("no upstream configured for ecosystem %q", ecosystem)
 	}
 	base = strings.TrimRight(base, "/")
 

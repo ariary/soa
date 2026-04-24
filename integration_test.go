@@ -128,7 +128,7 @@ func TestEndToEnd_AnalysisPipeline(t *testing.T) {
 	defer ts.Close()
 
 	// 4. POST /check
-	reqBody, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/fake/mod", Version: "v1.0.0"})
+	reqBody, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/fake/mod", Version: "v1.0.0"})
 	resp, err := http.Post(ts.URL+"/check", "application/json", bytes.NewReader(reqBody))
 	if err != nil {
 		t.Fatalf("POST /check failed: %v", err)

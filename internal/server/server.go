@@ -80,7 +80,8 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 
 	ecosystem := req.Ecosystem
 	if ecosystem == "" {
-		ecosystem = "go"
+		http.Error(w, "missing ecosystem field", http.StatusBadRequest)
+		return
 	}
 
 	log.Printf("[check] [%s] %s@%s", ecosystem, req.Module, req.Version)

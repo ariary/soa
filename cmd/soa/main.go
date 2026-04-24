@@ -76,7 +76,7 @@ func serveCmd(cfg_parsed quicli.Config) {
 			githubToken = os.Getenv(cfg.Server.Rules.Analysis.GitHubTokenEnv)
 		}
 		codeAnalyzer := analyzer.NewCodeAnalyzer(llm, upstreams, cfg.Server.Rules.Analysis.MaxSourceBytes)
-		releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", githubToken, "https://proxy.golang.org")
+		releaseAnalyzer := analyzer.NewReleaseAnalyzer(llm, "", githubToken, upstreams["go"])
 		s.SetAnalyzers([]analyzer.Analyzer{codeAnalyzer, releaseAnalyzer})
 		fmt.Fprintf(os.Stderr, "[soa] analysis enabled (provider: %s, model: %s)\n", llm.Name(), cfg.Server.Rules.Analysis.Model)
 	}
