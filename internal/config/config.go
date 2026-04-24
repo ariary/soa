@@ -27,13 +27,19 @@ type ServerConfig struct {
 }
 
 type RulesConfig struct {
-	MaxAge   MaxAgeRule   `yaml:"max_age"`
-	Analysis AnalysisRule `yaml:"analysis"`
+	MaxAge      MaxAgeRule      `yaml:"max_age"`
+	MinVersions MinVersionsRule `yaml:"min_versions"`
+	Analysis    AnalysisRule    `yaml:"analysis"`
 }
 
 type MaxAgeRule struct {
 	Enabled bool `yaml:"enabled"`
 	MinDays int  `yaml:"min_days"`
+}
+
+type MinVersionsRule struct {
+	Enabled bool `yaml:"enabled"`
+	Count   int  `yaml:"count"`
 }
 
 type AnalysisRule struct {
@@ -62,13 +68,19 @@ type yamlServerConfig struct {
 }
 
 type yamlRulesConfig struct {
-	MaxAge   yamlMaxAgeRule   `yaml:"max_age"`
-	Analysis yamlAnalysisRule `yaml:"analysis"`
+	MaxAge      yamlMaxAgeRule      `yaml:"max_age"`
+	MinVersions yamlMinVersionsRule `yaml:"min_versions"`
+	Analysis    yamlAnalysisRule    `yaml:"analysis"`
 }
 
 type yamlMaxAgeRule struct {
 	Enabled *bool `yaml:"enabled"`
 	MinDays int   `yaml:"min_days"`
+}
+
+type yamlMinVersionsRule struct {
+	Enabled *bool `yaml:"enabled"`
+	Count   int   `yaml:"count"`
 }
 
 type yamlAnalysisRule struct {
@@ -94,6 +106,10 @@ func defaults() Config {
 				MaxAge: MaxAgeRule{
 					Enabled: true,
 					MinDays: 7,
+				},
+				MinVersions: MinVersionsRule{
+					Enabled: true,
+					Count:   2,
 				},
 				Analysis: AnalysisRule{
 					Enabled:        false,
@@ -146,6 +162,13 @@ func LoadWithPath(path string) Config {
 				}
 				if yc.Server.Rules.MaxAge.MinDays != 0 {
 					cfg.Server.Rules.MaxAge.MinDays = yc.Server.Rules.MaxAge.MinDays
+				}
+				// Rules: min_versions
+				if yc.Server.Rules.MinVersions.Enabled != nil {
+					cfg.Server.Rules.MinVersions.Enabled = *yc.Server.Rules.MinVersions.Enabled
+				}
+				if yc.Server.Rules.MinVersions.Count != 0 {
+					cfg.Server.Rules.MinVersions.Count = yc.Server.Rules.MinVersions.Count
 				}
 				// Rules: analysis
 				if yc.Server.Rules.Analysis.Enabled != nil {
@@ -222,6 +245,17 @@ func applyEnv(cfg *Config) {
 	if v := os.Getenv("SOA_RULE_MAX_AGE_MIN_DAYS"); v != "" {
 		if d, err := strconv.Atoi(v); err == nil {
 			cfg.Server.Rules.MaxAge.MinDays = d
+		}
+	}
+	// Rules: min_versions
+	if v := os.Getenv("SOA_RULE_MIN_VERSIONS_ENABLED"); v != "" {
+		if b, ok := parseBoolEnv(v); ok {
+			cfg.Server.Rules.MinVersions.Enabled = b
+		}
+	}
+	if v := os.Getenv("SOA_RULE_MIN_VERSIONS_COUNT"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			cfg.Server.Rules.MinVersions.Count = n
 		}
 	}
 	// Rules: analysis

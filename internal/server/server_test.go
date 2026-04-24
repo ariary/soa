@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,9 +18,15 @@ import (
 	"github.com/ariary/soa/pkg/checkapi"
 )
 
-func newTestServerWithRules(t *testing.T, rules config.RulesConfig, upstreamTime time.Time) (*Server, *httptest.Server) {
+func newTestServerWithVersions(t *testing.T, rules config.RulesConfig, upstreamTime time.Time, numVersions int) (*Server, *httptest.Server) {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/@v/list") {
+			for i := range numVersions {
+				fmt.Fprintf(w, "v1.0.%d\n", i)
+			}
+			return
+		}
 		json.NewEncoder(w).Encode(map[string]any{
 			"Version": "v1.0.0",
 			"Time":    upstreamTime.Format(time.RFC3339),
@@ -29,6 +37,11 @@ func newTestServerWithRules(t *testing.T, rules config.RulesConfig, upstreamTime
 	cachePath := filepath.Join(t.TempDir(), "approved.json")
 	s := NewServer(rules, cachePath, upstream.URL)
 	return s, httptest.NewServer(s.Handler())
+}
+
+func newTestServerWithRules(t *testing.T, rules config.RulesConfig, upstreamTime time.Time) (*Server, *httptest.Server) {
+	t.Helper()
+	return newTestServerWithVersions(t, rules, upstreamTime, 10)
 }
 
 func newTestServer(t *testing.T, maxAgeDays int, upstreamTime time.Time) (*Server, *httptest.Server) {
@@ -336,5 +349,107 @@ func TestPollJob_NotFound(t *testing.T) {
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("expected 404, got %d", resp.StatusCode)
+	}
+}
+
+func TestMinVersions_BlocksLowCount(t *testing.T) {
+	rules := config.RulesConfig{
+		MinVersions: config.MinVersionsRule{Enabled: true, Count: 2},
+	}
+	_, srv := newTestServerWithVersions(t, rules, time.Now().AddDate(0, -6, 0), 1)
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/new/pkg", Version: "v0.0.1"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusBlocked {
+		t.Errorf("expected blocked for module with 1 version, got %s", cr.Status)
+	}
+	if cr.Reason == "" {
+		t.Error("expected a reason for blocking")
+	}
+}
+
+func TestMinVersions_AllowsExactCount(t *testing.T) {
+	rules := config.RulesConfig{
+		MinVersions: config.MinVersionsRule{Enabled: true, Count: 2},
+	}
+	_, srv := newTestServerWithVersions(t, rules, time.Now().AddDate(0, -6, 0), 2)
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusAllowed {
+		t.Errorf("expected allowed when version count equals minimum, got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+func TestMinVersions_Disabled(t *testing.T) {
+	rules := config.RulesConfig{
+		MinVersions: config.MinVersionsRule{Enabled: false, Count: 2},
+	}
+	_, srv := newTestServerWithVersions(t, rules, time.Now().AddDate(0, -6, 0), 1)
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/new/pkg", Version: "v0.0.1"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusAllowed {
+		t.Errorf("expected allowed when min_versions disabled, got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+func TestMinVersions_FailClosed(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/@v/list") {
+			http.Error(w, "internal error", http.StatusInternalServerError)
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"Version": "v1.0.0",
+			"Time":    time.Now().AddDate(0, -6, 0).Format(time.RFC3339),
+		})
+	}))
+	defer upstream.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "approved.json")
+	rules := config.RulesConfig{
+		MinVersions: config.MinVersionsRule{Enabled: true, Count: 2},
+	}
+	s := NewServer(rules, cachePath, upstream.URL)
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+	_ = s
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusBlocked {
+		t.Errorf("expected blocked on upstream error, got %s", cr.Status)
 	}
 }
