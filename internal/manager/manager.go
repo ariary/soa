@@ -3,13 +3,15 @@ package manager
 import "net/http"
 
 type PackageRequest struct {
-	Module  string
-	Version string
-	Type    string // "info", "mod", "zip", "list", "latest"
+	Ecosystem string // "go", "npm", "pip", "rubygems"
+	Module    string
+	Version   string
+	Type      string // ecosystem-specific type
+	Download  bool   // true if this is a package download (needs check)
 }
 
 func (p PackageRequest) NeedsCheck() bool {
-	return p.Type == "zip"
+	return p.Download
 }
 
 type Manager interface {

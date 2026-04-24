@@ -105,6 +105,34 @@ func TestGolangParse(t *testing.T) {
 	}
 }
 
+func TestGolangParse_SetsEcosystemAndDownload(t *testing.T) {
+	gm := &GolangManager{}
+	tests := []struct {
+		path     string
+		eco      string
+		download bool
+	}{
+		{"/github.com/foo/bar/@v/v1.0.0.zip", "go", true},
+		{"/github.com/foo/bar/@v/v1.0.0.info", "go", false},
+		{"/github.com/foo/bar/@v/v1.0.0.mod", "go", false},
+		{"/github.com/foo/bar/@v/list", "go", false},
+	}
+	for _, tt := range tests {
+		r, _ := http.NewRequest("GET", "http://localhost"+tt.path, nil)
+		pkg, err := gm.Parse(r)
+		if err != nil {
+			t.Errorf("Parse(%s) error: %v", tt.path, err)
+			continue
+		}
+		if pkg.Ecosystem != tt.eco {
+			t.Errorf("Parse(%s).Ecosystem = %s, want %s", tt.path, pkg.Ecosystem, tt.eco)
+		}
+		if pkg.Download != tt.download {
+			t.Errorf("Parse(%s).Download = %v, want %v", tt.path, pkg.Download, tt.download)
+		}
+	}
+}
+
 func TestGolangUpstreamURL(t *testing.T) {
 	gm := &GolangManager{}
 	r, _ := http.NewRequest("GET", "http://localhost/github.com/foo/bar/@v/v1.2.3.zip", nil)
