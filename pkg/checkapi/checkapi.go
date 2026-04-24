@@ -7,9 +7,10 @@ const (
 )
 
 type CheckRequest struct {
-	Module  string `json:"module"`
-	Version string `json:"version"`
-	Hash    string `json:"hash,omitempty"`
+	Ecosystem string `json:"ecosystem"`
+	Module    string `json:"module"`
+	Version   string `json:"version"`
+	Hash      string `json:"hash,omitempty"`
 }
 
 type CheckResponse struct {

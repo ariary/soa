@@ -19,18 +19,20 @@ type ActiveManager struct {
 }
 
 type Proxy struct {
-	managers []ActiveManager
-	client   *check.Client
-	spinner  *ui.Spinner
-	mux      *http.ServeMux
+	managers  []ActiveManager
+	client    *check.Client
+	spinner   *ui.Spinner
+	mux       *http.ServeMux
+	proxyAddr string
 }
 
-func New(managers []ActiveManager, client *check.Client, spinner *ui.Spinner) *Proxy {
+func New(managers []ActiveManager, client *check.Client, spinner *ui.Spinner, proxyAddr string) *Proxy {
 	p := &Proxy{
-		managers: managers,
-		client:   client,
-		spinner:  spinner,
-		mux:      http.NewServeMux(),
+		managers:  managers,
+		client:    client,
+		spinner:   spinner,
+		mux:       http.NewServeMux(),
+		proxyAddr: proxyAddr,
 	}
 	p.mux.HandleFunc("/", p.handle)
 	return p
@@ -93,8 +95,9 @@ func (p *Proxy) checkPackage(ctx context.Context, w http.ResponseWriter, pkg man
 	p.spinner.Start(pkg.Module, pkg.Version)
 
 	resp, err := p.client.CheckWithProgress(ctx, checkapi.CheckRequest{
-		Module:  pkg.Module,
-		Version: pkg.Version,
+		Ecosystem: pkg.Ecosystem,
+		Module:    pkg.Module,
+		Version:   pkg.Version,
 	}, func(progress float64) {
 		p.spinner.SetProgress(pkg.Module, progress)
 	})
