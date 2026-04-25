@@ -49,10 +49,10 @@ go install github.com/ariary/soa/cmd/soa@latest
 
 ```
 you ─► soa ─► local proxy ─► check server ─► allow/block
-                   │                              │
-                   │ if allowed                   │
-                   ▼                              │
-              upstream registry ◄─────────────────┘
+                   │                                   │
+                   │ if allowed                        │
+                   ▼                                   │
+              upstream registry ◄───────────────────┘
 ```
 
 1. `soa` detects active ecosystems and reads their upstream registry (e.g. `GOPROXY` for Go)
@@ -62,7 +62,7 @@ you ─► soa ─► local proxy ─► check server ─► allow/block
 5. Metadata requests pass through (no delay on lookups)
 6. When done, the proxy shuts down and `soa` exits with your command's exit code
 
-Currently supported: **Go**. Each ecosystem is a `Manager` — adding one is a single interface implementation.
+Currently supported: **npm, Go, ruby, pypi**. Each ecosystem is a `Manager` — adding one is a single interface implementation.
 
 ## Knobs
 
