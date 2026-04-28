@@ -1,14 +1,37 @@
 package analyzer
 
-import "context"
+import (
+	"context"
+	"encoding/json"
+)
 
 // Finding represents a single security signal detected during analysis.
 type Finding struct {
-	Signal      string   `json:"signal"`
-	Severity    string   `json:"severity"`
-	Description string   `json:"description"`
-	Evidence    []string `json:"evidence"`
-	Category    string   `json:"category"`
+	Signal      string          `json:"signal"`
+	Severity    string          `json:"severity"`
+	Description string          `json:"description"`
+	Evidence    FlexibleStrings `json:"evidence"`
+	Category    string          `json:"category"`
+}
+
+// FlexibleStrings accepts both a JSON string and a JSON array of strings,
+// normalising the single-string case into a one-element slice. This makes
+// LLM responses that return "evidence":"text" instead of ["text"] parseable.
+type FlexibleStrings []string
+
+func (f *FlexibleStrings) UnmarshalJSON(data []byte) error {
+	var arr []string
+	if err := json.Unmarshal(data, &arr); err == nil {
+		*f = arr
+		return nil
+	}
+	var s string
+	if err := json.Unmarshal(data, &s); err == nil {
+		*f = []string{s}
+		return nil
+	}
+	*f = nil
+	return nil
 }
 
 // AnalysisResult holds the complete output of an analysis run.
