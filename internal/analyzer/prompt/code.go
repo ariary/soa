@@ -150,7 +150,7 @@ Respond with a JSON object. Do not include any text outside the JSON.
       "signal": "<short signal name>",
       "severity": "<critical|high|medium|low|info>",
       "description": "<what was found and why it is suspicious>",
-      "evidence": "<specific code snippet, file path, or line reference>",
+      "evidence": ["<specific code snippet, file path, or line reference>"],
       "category": "<entry-point|obfuscation|dynamic-execution|c2-exfil|self-propagation|loader-stager|intent-mismatch|minified-source>"
     }
   ]

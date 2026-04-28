@@ -124,7 +124,7 @@ Respond with a JSON object. Do not include any text outside the JSON.
       "signal": "<short signal name>",
       "severity": "<critical|high|medium|low|info>",
       "description": "<what was found and why it is suspicious>",
-      "evidence": "<specific metadata field, version comparison, or timeline reference>",
+      "evidence": ["<specific metadata field, version comparison, or timeline reference>"],
       "category": "<account-compromise|release-anomaly|phantom-dependency|proxy-divergence|repo-signal|git-history|dep-graph>"
     }
   ]
@@ -141,6 +141,8 @@ If the release metadata shows no suspicious signals, return:
   "summary": "No suspicious release signals detected.",
   "findings": []
 }
+
+**Important:** A package being new, having few versions, or having a single maintainer is NOT inherently suspicious — most legitimate packages start this way. Only flag these attributes when they appear in combination with other concrete signals (phantom dependencies, account compromise indicators, release anomalies, proxy divergence, etc.). Do not block a package solely because it is young or has low adoption.
 
 Be precise. Cite specific metadata fields, version numbers, timestamps, and account names as evidence. Do not hallucinate findings — only report what is actually present in the provided metadata.`
 

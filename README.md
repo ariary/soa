@@ -4,18 +4,18 @@ Your packages go through customs now.
 
 ## The gist
 
-`soa` wraps your package manager commands and intercepts every dependency download through a proxy. Before any archive reaches your machine, it gets checked against a security policy server.  **It gets stopped at the border depending on your policies** (If the package is too fresh, too sketchy, or fails analysis)
+`soa` wraps your package manager commands and intercepts every dependency download through a local proxy. Before any archive reaches your machine, it gets checked against a security policy server. If the package is too fresh, too sketchy, or fails analysis, it gets stopped at the border.
 
-Think [supply-chain attacks](https://github.com/ariary/malicious-go-package): a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
+Think [supply chain attacks](https://github.com/ariary/malicious-go-package): a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
 
 ## Show me
 
-Terminal 1 — start the check server:
+Terminal 1, start the check server:
 ```bash
 soa serve
 ```
 
-Terminal 2 — prefix any command with `soa`:
+Terminal 2, prefix any command with `soa`:
 ```bash
 soa make build
 ```
@@ -32,11 +32,29 @@ If something gets blocked:
 [soa] ✗ github.com/sketchy/lib@v0.0.1 blocked: published 2 days ago
 ```
 
-`soa` wraps anything *.i.e* your toolchain, your aliases, your scripts:
+`soa` wraps anything: your toolchain, your aliases, your scripts:
 ```bash
 soa go test ./...
-soa gogo build          # custom alias? no problem
+soa npm install express
+soa pip install requests
+soa bundle install
 soa ./scripts/deps.sh   # anything that pulls packages
+```
+
+## Supported ecosystems
+
+| Ecosystem | Env var hijacked | Detection |
+|---|---|---|
+| Go | `GOPROXY` | `go.mod` in working directory |
+| npm | `npm_config_registry` | `package.json` in working directory |
+| pip | `PIP_INDEX_URL` | `requirements.txt` or `setup.py` in working directory |
+| RubyGems | `GEM_HOST` | `Gemfile` in working directory |
+
+Each ecosystem is a `Manager`, a single interface implementation. Adding one is straightforward.
+
+Disable an ecosystem for a single run:
+```bash
+soa --go=false npm install   # only intercept npm, leave Go alone
 ```
 
 ## Get it
@@ -55,14 +73,22 @@ you ─► soa ─► local proxy ─► check server ─► allow/block
               upstream registry ◄───────────────────┘
 ```
 
-1. `soa` detects active ecosystems and reads their upstream registry (e.g. `GOPROXY` for Go)
+1. `soa` detects active ecosystems and reads their upstream registry (e.g. `GOPROXY` for Go, `npm_config_registry` for npm)
 2. Starts a local HTTP proxy and overrides the relevant env vars to point to it
 3. Spawns your command with the modified environment
 4. For every source archive download, asks the check server
 5. Metadata requests pass through (no delay on lookups)
 6. When done, the proxy shuts down and `soa` exits with your command's exit code
 
-Currently supported: **npm, Go, ruby, pypi**. Each ecosystem is a `Manager` — adding one is a single interface implementation.
+## Rules
+
+The check server enforces rules in order. A package must pass all enabled rules to be allowed.
+
+**Max age**: the package version must have been published at least N days ago. Catches brand new malicious releases before they gain trust. Enabled by default, 7 days.
+
+**Min versions**: the package must have at least N released versions. A single version package with no history is suspicious. Enabled by default, minimum 2.
+
+**Analysis**: send the package to an LLM for malware detection. Code analysis and release metadata checks run in parallel. If either flags the package, it gets blocked immediately. Off by default. See [docs/malware-analysis.md](docs/malware-analysis.md) for setup.
 
 ## Knobs
 
@@ -81,6 +107,9 @@ server:
     max_age:
       enabled: true
       min_days: 7
+    min_versions:
+      enabled: true
+      count: 2
     analysis:
       enabled: false
       provider: "ollama"
@@ -95,31 +124,27 @@ Every value can be overridden with env vars:
 | `proxy.port` | `SOA_PROXY_PORT` | `8080` |
 | `check_timeout` | `SOA_CHECK_TIMEOUT` | `30s` |
 | `server.port` | `SOA_SERVER_PORT` | `9090` |
+| `server.cache_path` | `SOA_SERVER_CACHE_PATH` | `~/.config/soa/approved.json` |
 | `rules.max_age.enabled` | `SOA_RULE_MAX_AGE_ENABLED` | `true` |
 | `rules.max_age.min_days` | `SOA_RULE_MAX_AGE_MIN_DAYS` | `7` |
+| `rules.min_versions.enabled` | `SOA_RULE_MIN_VERSIONS_ENABLED` | `true` |
+| `rules.min_versions.count` | `SOA_RULE_MIN_VERSIONS_COUNT` | `2` |
 | `rules.analysis.enabled` | `SOA_RULE_ANALYSIS_ENABLED` | `false` |
 | `rules.analysis.provider` | `SOA_ANALYSIS_PROVIDER` | `ollama` |
 | `rules.analysis.model` | `SOA_ANALYSIS_MODEL` | `llama3` |
 
-Disable an ecosystem for a single run:
-```bash
-soa --go=false npm install foo   # don't intercept Go, only npm (future)
-```
-
-## Malware analysis
-
-`soa serve` can also send packages to an LLM for malware detection — code analysis + release metadata checks running in parallel. Off by default, enable it with a local [ollama](https://ollama.com) or a free-tier API (OpenAI, Gemini). See [docs/malware-analysis.md](docs/malware-analysis.md) for setup.
+See [docs/malware-analysis.md](docs/malware-analysis.md) for the full analysis config reference.
 
 ## FAQ
 
 **What if the check server is down?**
-All packages are blocked. soa fails closed. no free passes.
+All packages are blocked. `soa` fails closed. No free passes.
 
 **Does this slow things down?**
 Only source archive downloads go through the check. Metadata requests flow straight through. If the package is in the approved cache, the check is instant.
 
 **Can I use my own check server?**
-Yes. Point `check_url` to any server that speaks the [check API](pkg/checkapi/checkapi.go). The built-in `soa serve` is just a reference implementation.
+Yes. Point `check_url` to any server that speaks the [check API](pkg/checkapi/checkapi.go). The built in `soa serve` is just a reference implementation.
 
-**What's "soa" mean?**
+**What does "soa" mean?**
 It's Malagasy. Look it up. 🇲🇬
