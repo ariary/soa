@@ -1,13 +1,11 @@
-BINARY = soa
-SRC    = ./cmd/soa
-
 .PHONY: build clean test
 
 build:
-	go build -o $(BINARY) $(SRC)
+	go build -o soa ./cmd/soa
+	go build -o tonga ./cmd/tonga
 
 clean:
-	rm -f $(BINARY)
+	rm -f soa tonga
 
 test:
 	go test ./...
