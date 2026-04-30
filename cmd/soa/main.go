@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/ariary/quicli/pkg/quicli"
 	"github.com/ariary/soa/internal/analyzer"
 	"github.com/ariary/soa/internal/config"
+	"github.com/ariary/soa/internal/feed"
 	"github.com/ariary/soa/internal/manager"
 	"github.com/ariary/soa/internal/orchestrator"
 	"github.com/ariary/soa/internal/provider"
@@ -26,10 +32,13 @@ func main() {
 			{Name: "pip", Default: true, Description: "intercept pip package downloads"},
 			{Name: "rubygems", Default: true, Description: "intercept RubyGems downloads"},
 			{Name: "port", Default: 0, Description: "port to listen on (overrides config)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"serve"}},
+			{Name: "interval", Default: "5m", Description: "feed polling interval", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
+			{Name: "ecosystem", Default: "", Description: "filter by ecosystem (npm,pypi,go,rubygems)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
 		},
 		Function: proxyCmd,
 		Subcommands: quicli.Subcommands{
 			{Name: "serve", Description: "Start the soa reference check server", Function: serveCmd},
+			{Name: "feed", Description: "Live feed of malicious package advisories from osv.dev", Function: feedCmd},
 		},
 	}
 
@@ -121,4 +130,44 @@ func proxyCmd(cfg_parsed quicli.Config) {
 
 	exitCode := orchestrator.Run(cfg, managers, args, os.Environ(), isTTY, verbose)
 	os.Exit(exitCode)
+}
+
+func feedCmd(cfg_parsed quicli.Config) {
+	intervalStr := cfg_parsed.GetStringFlag("interval")
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[soa] invalid interval %q: %v\n", intervalStr, err)
+		os.Exit(1)
+	}
+
+	var ecosystems []string
+	if eco := cfg_parsed.GetStringFlag("ecosystem"); eco != "" {
+		ecosystems = strings.Split(eco, ",")
+	}
+
+	home, _ := os.UserHomeDir()
+	statePath := home + "/.config/soa/feed-state.json"
+
+	// Ensure state directory exists
+	if dir := filepath.Dir(statePath); dir != "" {
+		os.MkdirAll(dir, 0755)
+	}
+
+	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
+
+	cfg := feed.Config{
+		Interval:   interval,
+		Ecosystems: ecosystems,
+		StatePath:  statePath,
+	}
+
+	fmt.Fprintf(os.Stderr, "[soa] feed started (polling every %s)\n", interval)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := feed.Run(ctx, cfg, os.Stdout, !isTTY); err != nil && err != context.Canceled {
+		fmt.Fprintf(os.Stderr, "[soa] feed error: %v\n", err)
+		os.Exit(1)
+	}
 }
