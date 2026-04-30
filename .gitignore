@@ -24,8 +24,9 @@ profile.cov
 go.work
 go.work.sum
 
-# Built binary
+# Built binaries
 /soa
+/tonga
 
 # env file
 .env

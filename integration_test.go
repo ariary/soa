@@ -66,11 +66,13 @@ func TestEndToEnd_GoGetWithCheckServer(t *testing.T) {
 }
 
 func TestEndToEnd_BinaryBuilds(t *testing.T) {
-	cmd := exec.Command("go", "build", "-o", "/dev/null", "./cmd/soa/")
-	cmd.Dir = "."
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		t.Fatalf("failed to build soa: %v\n%s", err, out)
+	for _, target := range []string{"./cmd/soa/", "./cmd/tonga/"} {
+		cmd := exec.Command("go", "build", "-o", "/dev/null", target)
+		cmd.Dir = "."
+		out, err := cmd.CombinedOutput()
+		if err != nil {
+			t.Fatalf("failed to build %s: %v\n%s", target, err, out)
+		}
 	}
 }
 

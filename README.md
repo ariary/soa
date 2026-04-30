@@ -1,10 +1,15 @@
-# 🥢 soa
+# soa & tonga
+
+*Tonga soa* — welcome, in Malagasy. 🇲🇬
 
 Your packages go through customs now.
 
 ## The gist
 
-`soa` wraps your package manager commands and intercepts every dependency download through a local proxy. Before any archive reaches your machine, it gets checked against a security policy server. If the package is too fresh, too sketchy, or fails analysis, it gets stopped at the border.
+Two binaries, one job: stop malicious dependencies before they reach your machine.
+
+- **`soa`** — the client. Wraps your package manager commands and intercepts every dependency download through a local proxy. Before any archive reaches your machine, it gets checked against a security policy server. If the package is too fresh, too sketchy, or fails analysis, it gets stopped at the border.
+- **`tonga`** — the backend. Runs the check server and the advisory feed.
 
 Think [supply chain attacks](https://github.com/ariary/malicious-go-package): a dependency you've never heard of sneaks into your build and runs arbitrary code on install. `soa` catches it before it reaches your machine.
 
@@ -12,7 +17,7 @@ Think [supply chain attacks](https://github.com/ariary/malicious-go-package): a 
 
 Terminal 1, start the check server:
 ```bash
-soa serve
+tonga serve
 ```
 
 Terminal 2, prefix any command with `soa`:
@@ -61,28 +66,29 @@ soa --go=false npm install   # only intercept npm, leave Go alone
 
 ```bash
 go install github.com/ariary/soa/cmd/soa@latest
+go install github.com/ariary/soa/cmd/tonga@latest
 ```
 
 ## Under the hood
 
 ```
-you ─► soa ─► local proxy ─► check server ─► allow/block
-                   │                                   │
-                   │ if allowed                        │
-                   ▼                                   │
-              upstream registry ◄───────────────────┘
+you ─► soa ─► local proxy ─► tonga serve ─► allow/block
+                   │                              │
+                   │ if allowed                   │
+                   ▼                              │
+              upstream registry ◄────────────────┘
 ```
 
 1. `soa` detects active ecosystems and reads their upstream registry (e.g. `GOPROXY` for Go, `npm_config_registry` for npm)
 2. Starts a local HTTP proxy and overrides the relevant env vars to point to it
 3. Spawns your command with the modified environment
-4. For every source archive download, asks the check server
+4. For every source archive download, asks the check server (`tonga serve`)
 5. Metadata requests pass through (no delay on lookups)
 6. When done, the proxy shuts down and `soa` exits with your command's exit code
 
 ## Rules
 
-The check server enforces rules in order. A package must pass all enabled rules to be allowed.
+The check server (`tonga serve`) enforces rules in order. A package must pass all enabled rules to be allowed.
 
 **Known malware**: checks the package against known malicious package databases before anything else. If the package+version is a known supply chain attack, it gets blocked instantly. Always on, no config needed.
 - [osv.dev](https://osv.dev) MAL-* advisories ([OpenSSF](https://github.com/ossf/malicious-packages)) — always active
@@ -96,14 +102,14 @@ The check server enforces rules in order. A package must pass all enabled rules 
 
 ## Feed
 
-`soa feed` monitors for new malicious package advisories and prints them to your terminal in real-time:
+`tonga feed` monitors for new malicious package advisories and prints them to your terminal in real-time:
 
 ```bash
-soa feed
+tonga feed
 ```
 
 ```
-[soa] feed started (polling every 5m, sources: osv.dev + GHSA)
+[tonga] feed started (polling every 5m, sources: osv.dev + GHSA)
 [MAL-2025-49286] npm / gunpowder-ghost@209.0.0, 217.0.0, 213.0.0, 212.0.0, 211.0.0, 225.0.0
   Malicious code in gunpowder-ghost (npm)
   2026-04-30  https://osv.dev/vulnerability/MAL-2025-49286
@@ -116,7 +122,7 @@ soa feed
 
 Filter by ecosystem and tune the interval:
 ```bash
-soa feed --ecosystem npm,pypi --interval 1m
+tonga feed --ecosystem npm,pypi --interval 1m
 ```
 
 Two sources, deduplicated:
@@ -179,7 +185,7 @@ All packages are blocked. `soa` fails closed. No free passes.
 Only source archive downloads go through the check. Metadata requests flow straight through. If the package is in the approved cache, the check is instant.
 
 **Can I use my own check server?**
-Yes. Point `check_url` to any server that speaks the [check API](pkg/checkapi/checkapi.go). The built in `soa serve` is just a reference implementation.
+Yes. Point `check_url` to any server that speaks the [check API](pkg/checkapi/checkapi.go). `tonga serve` is just a reference implementation.
 
-**What does "soa" mean?**
-It's Malagasy. Look it up. 🇲🇬
+**What does "tonga soa" mean?**
+Welcome, in Malagasy. 🇲🇬
