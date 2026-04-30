@@ -90,6 +90,33 @@ The check server enforces rules in order. A package must pass all enabled rules 
 
 **Analysis**: send the package to an LLM for malware detection. Code analysis and release metadata checks run in parallel. If either flags the package, it gets blocked immediately. Off by default. See [docs/malware-analysis.md](docs/malware-analysis.md) for setup.
 
+## Feed
+
+`soa feed` monitors [osv.dev](https://osv.dev) for new malicious package advisories (MAL-*) and prints them to your terminal in real-time. No setup, no token, just run it:
+
+```bash
+soa feed
+```
+
+```
+[soa] feed started (polling every 5m)
+[MAL-2025-49286] npm / gunpowder-ghost@209.0.0, 217.0.0, 213.0.0, 212.0.0, 211.0.0, 225.0.0
+  Malicious code in gunpowder-ghost (npm)
+  2026-04-30  https://osv.dev/vulnerability/MAL-2025-49286
+---
+[MAL-2026-3199] npm / blackbeards-navigator@207.0.0, 211.0.0, 217.0.0, 214.0.0, 212.0.0, 213.0.0
+  Malicious code in blackbeards-navigator (npm)
+  2026-04-30  https://osv.dev/vulnerability/MAL-2026-3199
+---
+```
+
+Filter by ecosystem and tune the interval:
+```bash
+soa feed --ecosystem npm,pypi --interval 1m
+```
+
+Data comes from the [OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages) database via osv.dev. New advisories show up within ~15 minutes of discovery. State is persisted across restarts — you won't see the same advisory twice.
+
 ## Knobs
 
 Config lives at `~/.config/soa/config.yaml`:
