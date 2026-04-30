@@ -268,6 +268,7 @@ func TestRun_SinglePoll(t *testing.T) {
 		Interval:   0, // single poll
 		Ecosystems: nil,
 		StatePath:  statePath,
+		EnableOSV:  true,
 		csvURL:     srv.URL + "/csv",
 		osvAPIBase: srv.URL + "/",
 	}
@@ -292,5 +293,200 @@ func TestRun_SinglePoll(t *testing.T) {
 	ts := loadState(statePath)
 	if ts.IsZero() {
 		t.Error("expected state to be saved")
+	}
+}
+
+func TestRun_OSVDisabled(t *testing.T) {
+	csvHit := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/csv", func(w http.ResponseWriter, r *http.Request) {
+		csvHit = true
+		w.Write([]byte(`2026-04-30T15:37:33Z,npm/MAL-2025-1`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	cfg := Config{
+		Interval:  0,
+		StatePath: t.TempDir() + "/state.json",
+		EnableOSV: false,
+		csvURL:    srv.URL + "/csv",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	Run(ctx, cfg, &buf, true)
+	if csvHit {
+		t.Error("CSV endpoint should not be called when EnableOSV is false")
+	}
+	if buf.Len() != 0 {
+		t.Errorf("expected no output, got %q", buf.String())
+	}
+}
+
+func TestRun_GHSAOnly(t *testing.T) {
+	csvHit := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/csv", func(w http.ResponseWriter, r *http.Request) {
+		csvHit = true
+	})
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"securityAdvisories":{"nodes":[{
+			"ghsaId":"GHSA-test-0001",
+			"summary":"Malware npm pkg",
+			"publishedAt":"2026-04-30T16:00:00Z",
+			"vulnerabilities":{"nodes":[{"package":{"ecosystem":"NPM","name":"evil-pkg"},"vulnerableVersionRange":"= 1.0.0"}]}
+		}],"pageInfo":{"hasNextPage":false,"endCursor":""}}}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	cfg := Config{
+		Interval:     0,
+		StatePath:    t.TempDir() + "/state.json",
+		EnableOSV:    false,
+		EnableGHSA:   true,
+		GithubToken:  "test-token",
+		ghGraphqlURL: srv.URL + "/graphql",
+		csvURL:       srv.URL + "/csv",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	Run(ctx, cfg, &buf, true)
+	if csvHit {
+		t.Error("CSV endpoint should not be called when EnableOSV is false")
+	}
+	if !strings.Contains(buf.String(), "GHSA-test-0001") {
+		t.Errorf("expected GHSA advisory in output, got %q", buf.String())
+	}
+}
+
+func TestRun_GHSADisabledWithToken(t *testing.T) {
+	ghsaHit := false
+	mux := http.NewServeMux()
+	mux.HandleFunc("/csv", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`2026-04-30T15:37:33Z,npm/MAL-2025-1`))
+	})
+	mux.HandleFunc("/MAL-2025-1", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"MAL-2025-1","summary":"Bad","modified":"2026-04-30T15:37:33Z","affected":[{"package":{"ecosystem":"npm","name":"bad-pkg"},"versions":["1.0.0"]}]}`))
+	})
+	mux.HandleFunc("/graphql", func(w http.ResponseWriter, r *http.Request) {
+		ghsaHit = true
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	cfg := Config{
+		Interval:     0,
+		StatePath:    t.TempDir() + "/state.json",
+		EnableOSV:    true,
+		EnableGHSA:   false,
+		GithubToken:  "test-token",
+		ghGraphqlURL: srv.URL + "/graphql",
+		csvURL:       srv.URL + "/csv",
+		osvAPIBase:   srv.URL + "/",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	Run(ctx, cfg, &buf, true)
+	if ghsaHit {
+		t.Error("GHSA endpoint should not be called when EnableGHSA is false")
+	}
+	if !strings.Contains(buf.String(), "MAL-2025-1") {
+		t.Errorf("expected MAL advisory in output, got %q", buf.String())
+	}
+}
+
+func TestRun_SinceOverridesDefault(t *testing.T) {
+	// CSV has entries at two timestamps; set Since to only catch the newer one
+	csvData := `2026-04-30T16:00:00Z,npm/MAL-2026-NEW
+2026-04-30T10:00:00Z,npm/MAL-2026-OLD
+`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/csv", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(csvData))
+	})
+	mux.HandleFunc("/MAL-2026-NEW", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"MAL-2026-NEW","summary":"New","modified":"2026-04-30T16:00:00Z","affected":[{"package":{"ecosystem":"npm","name":"new-pkg"},"versions":["1.0.0"]}]}`))
+	})
+	mux.HandleFunc("/MAL-2026-OLD", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"MAL-2026-OLD","summary":"Old","modified":"2026-04-30T10:00:00Z","affected":[{"package":{"ecosystem":"npm","name":"old-pkg"},"versions":["1.0.0"]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	var buf bytes.Buffer
+	cfg := Config{
+		Interval:   0,
+		StatePath:  t.TempDir() + "/state.json",
+		EnableOSV:  true,
+		Since:      time.Date(2026, 4, 30, 12, 0, 0, 0, time.UTC), // only entries after noon
+		csvURL:     srv.URL + "/csv",
+		osvAPIBase: srv.URL + "/",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	Run(ctx, cfg, &buf, true)
+	out := buf.String()
+	if !strings.Contains(out, "MAL-2026-NEW") {
+		t.Error("expected MAL-2026-NEW in output")
+	}
+	if strings.Contains(out, "MAL-2026-OLD") {
+		t.Error("MAL-2026-OLD should be filtered out by Since")
+	}
+}
+
+func TestRun_StateFileOverridesSince(t *testing.T) {
+	// State file has a newer timestamp than Since — state should win
+	csvData := `2026-04-30T18:00:00Z,npm/MAL-2026-LATEST
+2026-04-30T14:00:00Z,npm/MAL-2026-MID
+`
+	mux := http.NewServeMux()
+	mux.HandleFunc("/csv", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(csvData))
+	})
+	mux.HandleFunc("/MAL-2026-LATEST", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"MAL-2026-LATEST","summary":"Latest","modified":"2026-04-30T18:00:00Z","affected":[{"package":{"ecosystem":"npm","name":"latest-pkg"},"versions":["1.0.0"]}]}`))
+	})
+	mux.HandleFunc("/MAL-2026-MID", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"id":"MAL-2026-MID","summary":"Mid","modified":"2026-04-30T14:00:00Z","affected":[{"package":{"ecosystem":"npm","name":"mid-pkg"},"versions":["1.0.0"]}]}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	statePath := t.TempDir() + "/state.json"
+	// Pre-save state at 16:00 — should ignore Since and only show entries after 16:00
+	saveState(statePath, time.Date(2026, 4, 30, 16, 0, 0, 0, time.UTC))
+
+	var buf bytes.Buffer
+	cfg := Config{
+		Interval:   0,
+		StatePath:  statePath,
+		EnableOSV:  true,
+		Since:      time.Date(2026, 4, 30, 10, 0, 0, 0, time.UTC), // far back, but state overrides
+		csvURL:     srv.URL + "/csv",
+		osvAPIBase: srv.URL + "/",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	Run(ctx, cfg, &buf, true)
+	out := buf.String()
+	if !strings.Contains(out, "MAL-2026-LATEST") {
+		t.Error("expected MAL-2026-LATEST in output")
+	}
+	if strings.Contains(out, "MAL-2026-MID") {
+		t.Error("MAL-2026-MID should be filtered out — state file is newer than its timestamp")
 	}
 }

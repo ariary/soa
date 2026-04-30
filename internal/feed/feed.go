@@ -371,7 +371,10 @@ type Config struct {
 	Interval    time.Duration
 	Ecosystems  []string
 	StatePath   string
-	GithubToken string // optional; enables GHSA MALWARE feed
+	GithubToken string    // optional; enables GHSA MALWARE feed
+	EnableOSV   bool      // poll osv.dev MAL-* feed
+	EnableGHSA  bool      // poll GHSA MALWARE feed
+	Since       time.Time // initial lookback; used when no state file exists
 	// Overridable endpoints for testing.
 	csvURL       string
 	osvAPIBase   string
@@ -442,6 +445,9 @@ func dedup(ghsaAdvs []Advisory, malAdvs []Advisory) []Advisory {
 // repeats every cfg.Interval. It blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
 	lastSeen := loadState(cfg.StatePath)
+	if lastSeen.IsZero() && !cfg.Since.IsZero() {
+		lastSeen = cfg.Since
+	}
 	if lastSeen.IsZero() {
 		lastSeen = time.Now().Add(-24 * time.Hour)
 	}
@@ -449,24 +455,26 @@ func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
 	poll := func() {
 		// Source 1: osv.dev MAL-*
 		var malAdvs []Advisory
-		entries, err := fetchRecentMALIDs(ctx, cfg.getCSVURL(), lastSeen)
-		if err != nil {
-			log.Printf("[feed] error fetching CSV: %v", err)
-		} else {
-			entries = filterByEcosystem(entries, cfg.Ecosystems)
-			for _, entry := range entries {
-				adv, err := fetchAdvisory(ctx, cfg.getOSVAPIBase(), entry.ID)
-				if err != nil {
-					log.Printf("[feed] error fetching %s: %v", entry.ID, err)
-					continue
+		if cfg.EnableOSV {
+			entries, err := fetchRecentMALIDs(ctx, cfg.getCSVURL(), lastSeen)
+			if err != nil {
+				log.Printf("[feed] error fetching CSV: %v", err)
+			} else {
+				entries = filterByEcosystem(entries, cfg.Ecosystems)
+				for _, entry := range entries {
+					adv, err := fetchAdvisory(ctx, cfg.getOSVAPIBase(), entry.ID)
+					if err != nil {
+						log.Printf("[feed] error fetching %s: %v", entry.ID, err)
+						continue
+					}
+					malAdvs = append(malAdvs, adv)
 				}
-				malAdvs = append(malAdvs, adv)
 			}
 		}
 
 		// Source 2: GHSA MALWARE (optional, needs token)
 		var ghsaAdvs []Advisory
-		if cfg.GithubToken != "" {
+		if cfg.EnableGHSA && cfg.GithubToken != "" {
 			ghsa, err := fetchGHSAMalware(ctx, cfg.GithubToken, cfg.ghGraphqlURL, lastSeen)
 			if err != nil {
 				log.Printf("[feed] error fetching GHSA: %v", err)
