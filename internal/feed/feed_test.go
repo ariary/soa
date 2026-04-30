@@ -1,6 +1,9 @@
 package feed
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
 	"testing"
 	"time"
 )
@@ -47,5 +50,60 @@ func TestParseMALEntries_MalformedLines(t *testing.T) {
 	entries := parseMALEntries([]byte(csv), time.Time{})
 	if len(entries) != 1 {
 		t.Fatalf("expected 1 entry (skip malformed), got %d", len(entries))
+	}
+}
+
+func TestFetchRecentMALIDs(t *testing.T) {
+	body := `2026-04-30T15:37:33.526586Z,npm/MAL-2025-49286
+2026-04-30T15:32:51.46441Z,npm/MAL-2026-3199
+2026-04-30T14:00:00Z,PyPI/GHSA-xqmj-j6mv-4862
+`
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Range") == "" {
+			t.Error("expected Range header")
+		}
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	since := time.Date(2026, 4, 30, 15, 0, 0, 0, time.UTC)
+	entries, err := fetchRecentMALIDs(context.Background(), srv.URL, since)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 2 {
+		t.Fatalf("expected 2, got %d", len(entries))
+	}
+}
+
+func TestFetchAdvisory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/MAL-2026-3199" {
+			t.Errorf("unexpected path: %s", r.URL.Path)
+		}
+		w.Write([]byte(`{
+			"id": "MAL-2026-3199",
+			"summary": "Malicious package",
+			"modified": "2026-04-30T15:32:51Z",
+			"affected": [{
+				"package": {"ecosystem": "npm", "name": "blackbeards-navigator"},
+				"versions": ["207.0.0", "208.0.0"]
+			}]
+		}`))
+	}))
+	defer srv.Close()
+
+	adv, err := fetchAdvisory(context.Background(), srv.URL+"/", "MAL-2026-3199")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if adv.ID != "MAL-2026-3199" {
+		t.Errorf("expected MAL-2026-3199, got %s", adv.ID)
+	}
+	if adv.Summary != "Malicious package" {
+		t.Errorf("unexpected summary: %s", adv.Summary)
+	}
+	if len(adv.Affected) != 1 || adv.Affected[0].Package.Name != "blackbeards-navigator" {
+		t.Errorf("unexpected affected: %+v", adv.Affected)
 	}
 }

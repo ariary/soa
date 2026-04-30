@@ -2,6 +2,11 @@ package feed
 
 import (
 	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"time"
 )
@@ -52,4 +57,75 @@ func parseMALEntries(data []byte, since time.Time) []MALEntry {
 		})
 	}
 	return entries
+}
+
+// Advisory holds parsed osv.dev vulnerability data.
+type Advisory struct {
+	ID       string            `json:"id"`
+	Summary  string            `json:"summary"`
+	Modified time.Time         `json:"modified"`
+	Affected []AffectedPackage `json:"affected"`
+}
+
+// AffectedPackage is one affected entry from an osv.dev advisory.
+type AffectedPackage struct {
+	Package  osvPackage `json:"package"`
+	Versions []string   `json:"versions"`
+}
+
+type osvPackage struct {
+	Ecosystem string `json:"ecosystem"`
+	Name      string `json:"name"`
+}
+
+var httpClient = &http.Client{Timeout: 30 * time.Second}
+
+// fetchRecentMALIDs fetches the first rangeBytes of csvURL and returns MAL entries newer than since.
+func fetchRecentMALIDs(ctx context.Context, csvEndpoint string, since time.Time) ([]MALEntry, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, csvEndpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", rangeBytes-1))
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	// Accept 200 (full content) or 206 (partial content)
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
+		return nil, fmt.Errorf("unexpected status %d", resp.StatusCode)
+	}
+
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return parseMALEntries(data, since), nil
+}
+
+// fetchAdvisory fetches a single advisory by ID from osv.dev.
+func fetchAdvisory(ctx context.Context, apiBase string, id string) (Advisory, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiBase+id, nil)
+	if err != nil {
+		return Advisory{}, err
+	}
+
+	resp, err := httpClient.Do(req)
+	if err != nil {
+		return Advisory{}, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return Advisory{}, fmt.Errorf("osv.dev returned %d for %s", resp.StatusCode, id)
+	}
+
+	var adv Advisory
+	if err := json.NewDecoder(resp.Body).Decode(&adv); err != nil {
+		return Advisory{}, fmt.Errorf("decoding advisory %s: %w", id, err)
+	}
+	return adv, nil
 }
