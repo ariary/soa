@@ -25,24 +25,28 @@ type cacheEntry struct {
 }
 
 type Server struct {
-	rules       config.RulesConfig
-	cachePath   string
-	upstreams   map[string]string
-	githubToken string
-	mu          sync.RWMutex
-	cache       map[string]cacheEntry
-	analyzers   []analyzer.Analyzer
-	jobs        map[string]*AnalysisJob
-	jobsMu      sync.RWMutex
+	rules          config.RulesConfig
+	cachePath      string
+	upstreams      map[string]string
+	githubToken    string
+	osvQueryURL    string
+	ghsaGraphQLURL string
+	mu             sync.RWMutex
+	cache          map[string]cacheEntry
+	analyzers      []analyzer.Analyzer
+	jobs           map[string]*AnalysisJob
+	jobsMu         sync.RWMutex
 }
 
 func NewServer(rules config.RulesConfig, cachePath string, upstreams map[string]string) *Server {
 	s := &Server{
-		rules:     rules,
-		cachePath: cachePath,
-		upstreams: upstreams,
-		cache:     make(map[string]cacheEntry),
-		jobs:      make(map[string]*AnalysisJob),
+		rules:          rules,
+		cachePath:      cachePath,
+		upstreams:      upstreams,
+		osvQueryURL:    "https://api.osv.dev/v1/query",
+		ghsaGraphQLURL: "https://api.github.com/graphql",
+		cache:          make(map[string]cacheEntry),
+		jobs:           make(map[string]*AnalysisJob),
 	}
 	s.loadCache()
 	s.startJobCleanup()
@@ -241,7 +245,7 @@ var malwareClient = &http.Client{Timeout: 10 * time.Second}
 // for known malicious packages. Returns the advisory ID if found.
 func (s *Server) checkKnownMalware(ctx context.Context, ecosystem, module, version string) (string, error) {
 	// Source 1: osv.dev MAL-*
-	if id, err := checkOSVMalware(ctx, ecosystem, module, version); err != nil {
+	if id, err := checkOSVMalware(ctx, s.osvQueryURL, ecosystem, module, version); err != nil {
 		log.Printf("[check] osv.dev lookup error for %s@%s: %v", module, version, err)
 	} else if id != "" {
 		return id, nil
@@ -249,7 +253,7 @@ func (s *Server) checkKnownMalware(ctx context.Context, ecosystem, module, versi
 
 	// Source 2: GHSA MALWARE (optional, needs token)
 	if s.githubToken != "" {
-		if id, err := checkGHSAMalware(ctx, s.githubToken, ecosystem, module, version); err != nil {
+		if id, err := checkGHSAMalware(ctx, s.githubToken, s.ghsaGraphQLURL, ecosystem, module, version); err != nil {
 			log.Printf("[check] GHSA lookup error for %s@%s: %v", module, version, err)
 		} else if id != "" {
 			return id, nil
@@ -260,7 +264,8 @@ func (s *Server) checkKnownMalware(ctx context.Context, ecosystem, module, versi
 }
 
 // checkOSVMalware queries osv.dev for known malware advisories (MAL-*).
-func checkOSVMalware(ctx context.Context, ecosystem, module, version string) (string, error) {
+// Withdrawn advisories are skipped.
+func checkOSVMalware(ctx context.Context, queryURL, ecosystem, module, version string) (string, error) {
 	payload, _ := json.Marshal(map[string]any{
 		"package": map[string]string{
 			"ecosystem": osvEcosystem(ecosystem),
@@ -269,7 +274,7 @@ func checkOSVMalware(ctx context.Context, ecosystem, module, version string) (st
 		"version": version,
 	})
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.osv.dev/v1/query", bytes.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, queryURL, bytes.NewReader(payload))
 	if err != nil {
 		return "", err
 	}
@@ -287,7 +292,8 @@ func checkOSVMalware(ctx context.Context, ecosystem, module, version string) (st
 
 	var result struct {
 		Vulns []struct {
-			ID string `json:"id"`
+			ID        string     `json:"id"`
+			Withdrawn *time.Time `json:"withdrawn"`
 		} `json:"vulns"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
@@ -295,6 +301,9 @@ func checkOSVMalware(ctx context.Context, ecosystem, module, version string) (st
 	}
 
 	for _, v := range result.Vulns {
+		if v.Withdrawn != nil {
+			continue
+		}
 		if strings.HasPrefix(v.ID, "MAL-") {
 			return v.ID, nil
 		}
@@ -304,7 +313,7 @@ func checkOSVMalware(ctx context.Context, ecosystem, module, version string) (st
 
 // checkGHSAMalware queries GitHub Advisory Database for MALWARE-classified advisories
 // affecting the given package+version.
-func checkGHSAMalware(ctx context.Context, token, ecosystem, module, version string) (string, error) {
+func checkGHSAMalware(ctx context.Context, token, graphqlURL, ecosystem, module, version string) (string, error) {
 	query := `query($eco: SecurityAdvisoryEcosystem!, $pkg: String!, $cursor: String) {
   securityVulnerabilities(ecosystem: $eco, package: $pkg, classifications: [MALWARE], first: 25, after: $cursor) {
     nodes {
@@ -321,7 +330,7 @@ func checkGHSAMalware(ctx context.Context, token, ecosystem, module, version str
 
 	for {
 		body, _ := json.Marshal(map[string]any{"query": query, "variables": vars})
-		req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.github.com/graphql", bytes.NewReader(body))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphqlURL, bytes.NewReader(body))
 		if err != nil {
 			return "", err
 		}

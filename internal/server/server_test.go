@@ -505,3 +505,51 @@ func TestCompareVersions(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckOSVMalware_SkipsWithdrawn(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"vulns":[{"id":"MAL-2026-9999","withdrawn":"2026-04-30T00:00:00Z"}]}`))
+	}))
+	defer srv.Close()
+
+	id, err := checkOSVMalware(context.Background(), srv.URL, "npm", "evil-pkg", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "" {
+		t.Errorf("expected empty (withdrawn), got %q", id)
+	}
+}
+
+func TestCheckOSVMalware_BlocksActive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"vulns":[{"id":"MAL-2026-1234"}]}`))
+	}))
+	defer srv.Close()
+
+	id, err := checkOSVMalware(context.Background(), srv.URL, "npm", "evil-pkg", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "MAL-2026-1234" {
+		t.Errorf("expected MAL-2026-1234, got %q", id)
+	}
+}
+
+func TestCheckOSVMalware_SkipsWithdrawnKeepsActive(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"vulns":[
+			{"id":"MAL-2026-RETRACTED","withdrawn":"2026-01-01T00:00:00Z"},
+			{"id":"MAL-2026-ACTIVE"}
+		]}`))
+	}))
+	defer srv.Close()
+
+	id, err := checkOSVMalware(context.Background(), srv.URL, "npm", "evil-pkg", "1.0.0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if id != "MAL-2026-ACTIVE" {
+		t.Errorf("expected MAL-2026-ACTIVE (skip withdrawn), got %q", id)
+	}
+}
