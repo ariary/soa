@@ -13,14 +13,17 @@ import (
 
 // mockProvider returns a fixed response for every Complete call.
 type mockProvider struct {
-	response string
+	response    string
+	lastRequest provider.Request
 }
 
 func (m *mockProvider) Name() string { return "mock" }
 
-func (m *mockProvider) Complete(_ context.Context, _ provider.Request) (provider.Response, error) {
+func (m *mockProvider) Complete(_ context.Context, req provider.Request) (provider.Response, error) {
+	m.lastRequest = req
 	return provider.Response{Content: m.response}, nil
 }
+
 
 // createTestZip creates an in-memory zip from a map of path->content.
 func createTestZip(t *testing.T, files map[string]string) []byte {

@@ -105,3 +105,22 @@ func TestNewUnknownProvider(t *testing.T) {
 		t.Fatal("expected error for unknown provider, got nil")
 	}
 }
+
+func TestNewOllamaProvider_CustomBaseURL(t *testing.T) {
+	cfg := config.AnalysisRule{
+		Provider: "ollama",
+		Model:    "llama3",
+		BaseURL:  "http://remote-host:11434",
+	}
+	p, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New() returned error: %v", err)
+	}
+	o, ok := p.(*Ollama)
+	if !ok {
+		t.Fatalf("expected *Ollama, got %T", p)
+	}
+	if o.baseURL != "http://remote-host:11434" {
+		t.Errorf("expected custom baseURL %q, got %q", "http://remote-host:11434", o.baseURL)
+	}
+}

@@ -44,6 +44,9 @@ func TestPipInjectEnv(t *testing.T) {
 	if found["PIP_INDEX_URL"] != "http://localhost:8080/pypi/simple/" {
 		t.Errorf("PIP_INDEX_URL not overridden, got %s", found["PIP_INDEX_URL"])
 	}
+	if found["HOME"] != "/home/user" {
+		t.Errorf("HOME should be preserved, got %q", found["HOME"])
+	}
 }
 
 func TestPipMatch(t *testing.T) {
@@ -156,6 +159,53 @@ func TestPipUpstreamURL(t *testing.T) {
 		got := m.UpstreamURL("https://pypi.org", r)
 		if got != tt.want {
 			t.Errorf("UpstreamURL(%s) = %s, want %s", tt.path, got, tt.want)
+		}
+	}
+}
+
+func TestPipDetect_EmptyValue(t *testing.T) {
+	// PIP_INDEX_URL= (empty value) should fall through to default.
+	env := []string{"HOME=/home/user", "PIP_INDEX_URL=", "PATH=/usr/bin"}
+	m := &PipManager{}
+	upstream, active := m.Detect(env)
+	if !active {
+		t.Fatal("expected active with default")
+	}
+	if upstream != "https://pypi.org" {
+		t.Errorf("expected default upstream when PIP_INDEX_URL is empty, got %s", upstream)
+	}
+}
+
+func TestParsePipFilename_Boundaries(t *testing.T) {
+	tests := []struct {
+		filename    string
+		wantName    string
+		wantVersion string
+	}{
+		// whl with only 1 part (no hyphen) -> len(parts) < 2, return filename without .whl, empty version
+		{"singlepart.whl", "singlepart.whl", ""},
+		// tar.gz where hyphen is at position 0: name is empty, version starts with digit
+		{"-1.0.0.tar.gz", "", "1.0.0"},
+		// tar.gz where digit after hyphen is exactly '0'
+		{"pkg-0.1.0.tar.gz", "pkg", "0.1.0"},
+		// tar.gz where digit after hyphen is exactly '9'
+		{"pkg-9.0.0.tar.gz", "pkg", "9.0.0"},
+		// tar.gz with no version digit after hyphen (hyphen followed by non-digit)
+		{"pkg-.tar.gz", "pkg-.tar.gz", ""},
+		// tar.gz with hyphen followed by a letter (not a digit)
+		{"my-package-abc.tar.gz", "my-package-abc.tar.gz", ""},
+		// whl with exactly 2 parts
+		{"name-1.0.0.whl", "name", "1.0.0"},
+		// normal tar.gz
+		{"requests-2.31.0.tar.gz", "requests", "2.31.0"},
+	}
+	for _, tt := range tests {
+		name, version := parsePipFilename(tt.filename)
+		if name != tt.wantName {
+			t.Errorf("parsePipFilename(%q) name = %q, want %q", tt.filename, name, tt.wantName)
+		}
+		if version != tt.wantVersion {
+			t.Errorf("parsePipFilename(%q) version = %q, want %q", tt.filename, version, tt.wantVersion)
 		}
 	}
 }

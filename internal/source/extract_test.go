@@ -210,3 +210,113 @@ func TestExtract_TarGz_Tiering(t *testing.T) {
 		t.Errorf("expected first file to be index.js, got %s", files[0].Path)
 	}
 }
+
+func TestExtractFiles_AtLeastOneFileExceedsMax(t *testing.T) {
+	// A single file that exceeds maxBytes should still be included (first file
+	// is always included regardless of size).
+	bigContent := strings.Repeat("x", 5000)
+	zipData := createTestZip(t, map[string]string{
+		"mod@v1/main.go": bigContent,
+	})
+
+	files, err := ExtractFiles(zipData, 100) // maxBytes = 100, but file is 5000
+	if err != nil {
+		t.Fatalf("ExtractFiles failed: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("expected exactly 1 file (first always included), got %d", len(files))
+	}
+	if len(files[0].Content) != 5000 {
+		t.Errorf("expected first file content length 5000, got %d", len(files[0].Content))
+	}
+}
+
+func TestExtractFiles_ExactMaxBytes(t *testing.T) {
+	// Two files whose total size exactly equals maxBytes: both should be included.
+	content500 := strings.Repeat("a", 500)
+	zipData := createTestZip(t, map[string]string{
+		"mod@v1/a.go": content500,
+		"mod@v1/b.go": content500,
+	})
+
+	files, err := ExtractFiles(zipData, 1000)
+	if err != nil {
+		t.Fatalf("ExtractFiles failed: %v", err)
+	}
+
+	totalBytes := 0
+	for _, f := range files {
+		totalBytes += len(f.Content)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files when total == maxBytes, got %d", len(files))
+	}
+	if totalBytes != 1000 {
+		t.Errorf("expected total bytes 1000, got %d", totalBytes)
+	}
+}
+
+func TestExtractFiles_SecondFileExceedsMax(t *testing.T) {
+	// First file fits, second file would push total over maxBytes -> excluded.
+	// This tests the boundary condition: i > 0 && totalBytes+size > maxBytes
+	zipData := createTestZip(t, map[string]string{
+		"mod@v1/main.go": strings.Repeat("a", 600), // tier 0 (entry point)
+		"mod@v1/lib.go":  strings.Repeat("b", 500), // tier 2 (normal file)
+	})
+
+	files, err := ExtractFiles(zipData, 700) // 600 fits, 600+500=1100 > 700
+	if err != nil {
+		t.Fatalf("ExtractFiles failed: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Errorf("expected 1 file (second excluded by maxBytes), got %d", len(files))
+	}
+}
+
+func TestExtract_TarGz_AtLeastOneFileExceedsMax(t *testing.T) {
+	// Same test for tgz path: single large file should still be included.
+	bigContent := strings.Repeat("y", 5000)
+	data := createTestTarGz(t, map[string]string{
+		"package/index.js": bigContent,
+	})
+
+	files, err := Extract(data, "tgz", 100)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	if len(files) != 1 {
+		t.Fatalf("expected exactly 1 file (first always included), got %d", len(files))
+	}
+	if len(files[0].Content) != 5000 {
+		t.Errorf("expected first file content length 5000, got %d", len(files[0].Content))
+	}
+}
+
+func TestExtract_TarGz_ExactMaxBytes(t *testing.T) {
+	content500 := strings.Repeat("c", 500)
+	data := createTestTarGz(t, map[string]string{
+		"package/a.js": content500,
+		"package/b.js": content500,
+	})
+
+	files, err := Extract(data, "tgz", 1000)
+	if err != nil {
+		t.Fatalf("Extract failed: %v", err)
+	}
+
+	totalBytes := 0
+	for _, f := range files {
+		totalBytes += len(f.Content)
+	}
+
+	if len(files) != 2 {
+		t.Errorf("expected 2 files when total == maxBytes, got %d", len(files))
+	}
+	if totalBytes != 1000 {
+		t.Errorf("expected total bytes 1000, got %d", totalBytes)
+	}
+}

@@ -50,6 +50,9 @@ func TestGolangInjectEnv(t *testing.T) {
 	if found["GONOSUMCHECK"] != "*" {
 		t.Errorf("GONOSUMCHECK not set, got %s", found["GONOSUMCHECK"])
 	}
+	if found["HOME"] != "/home/user" {
+		t.Errorf("HOME should be preserved, got %q", found["HOME"])
+	}
 }
 
 func TestGolangMatch(t *testing.T) {
@@ -140,5 +143,41 @@ func TestGolangUpstreamURL(t *testing.T) {
 	want := "https://proxy.golang.org/github.com/foo/bar/@v/v1.2.3.zip"
 	if got != want {
 		t.Errorf("UpstreamURL = %s, want %s", got, want)
+	}
+}
+
+func TestGolangDetect_EmptyValue(t *testing.T) {
+	// GOPROXY= (empty value after '=') should NOT be detected; fall through to default.
+	env := []string{"HOME=/home/user", "GOPROXY=", "PATH=/usr/bin"}
+	gm := &GolangManager{}
+	upstream, active := gm.Detect(env)
+	if !active {
+		t.Fatal("expected active with default GOPROXY")
+	}
+	if upstream != "https://proxy.golang.org,direct" {
+		t.Errorf("expected default upstream when GOPROXY is empty, got %s", upstream)
+	}
+}
+
+func TestGolangParse_NoDotInRest(t *testing.T) {
+	// A request like /@v/list has no dot in rest, and should be handled by the "list" check.
+	// A request like /@v/something (no dot, not "list") should return an error.
+	gm := &GolangManager{}
+
+	// "list" case: no dot, but rest == "list" -> OK
+	r, _ := http.NewRequest("GET", "http://localhost/github.com/foo/bar/@v/list", nil)
+	pkg, err := gm.Parse(r)
+	if err != nil {
+		t.Fatalf("Parse list should succeed, got error: %v", err)
+	}
+	if pkg.Type != "list" {
+		t.Errorf("expected type list, got %s", pkg.Type)
+	}
+
+	// Non-list, no dot: should error (lastDot < 0)
+	r2, _ := http.NewRequest("GET", "http://localhost/github.com/foo/bar/@v/nodot", nil)
+	_, err = gm.Parse(r2)
+	if err == nil {
+		t.Fatal("expected error when rest has no dot and is not 'list'")
 	}
 }
