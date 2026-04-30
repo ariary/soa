@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -92,6 +94,20 @@ func (s *Server) handleCheck(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Known malware check (osv.dev)
+	if malID, err := checkOSVMalware(r.Context(), ecosystem, req.Module, req.Version); err != nil {
+		log.Printf("[check] %s@%s osv.dev lookup error: %v", req.Module, req.Version, err)
+		// Non-fatal: continue to other rules
+	} else if malID != "" {
+		reason := fmt.Sprintf("known malicious package (%s)", malID)
+		log.Printf("[check] %s@%s → blocked (%s)", req.Module, req.Version, reason)
+		json.NewEncoder(w).Encode(checkapi.CheckResponse{
+			Status: checkapi.StatusBlocked,
+			Reason: reason,
+		})
+		return
+	}
+
 	// Min versions check
 	if s.rules.MinVersions.Enabled {
 		versions, err := registry.FetchVersionList(s.upstreams, ecosystem, req.Module)
@@ -180,6 +196,67 @@ func (s *Server) handlePollJob(w http.ResponseWriter, r *http.Request) {
 	}
 	job.mu.Unlock()
 	json.NewEncoder(w).Encode(resp)
+}
+
+// osvEcosystem maps soa ecosystem names to osv.dev ecosystem names.
+func osvEcosystem(eco string) string {
+	switch eco {
+	case "go":
+		return "Go"
+	case "npm":
+		return "npm"
+	case "pip":
+		return "PyPI"
+	case "rubygems":
+		return "RubyGems"
+	default:
+		return eco
+	}
+}
+
+// checkOSVMalware queries osv.dev for known malware advisories (MAL-*) affecting
+// the given package. Returns the MAL ID if found, empty string if clean.
+func checkOSVMalware(ctx context.Context, ecosystem, module, version string) (string, error) {
+	payload, _ := json.Marshal(map[string]interface{}{
+		"package": map[string]string{
+			"ecosystem": osvEcosystem(ecosystem),
+			"name":      module,
+		},
+		"version": version,
+	})
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, "https://api.osv.dev/v1/query", bytes.NewReader(payload))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 10 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("osv.dev returned %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Vulns []struct {
+			ID string `json:"id"`
+		} `json:"vulns"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+
+	for _, v := range result.Vulns {
+		if strings.HasPrefix(v.ID, "MAL-") {
+			return v.ID, nil
+		}
+	}
+	return "", nil
 }
 
 func cacheKey(module, version string) string {
