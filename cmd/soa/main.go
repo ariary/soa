@@ -1,13 +1,19 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/ariary/quicli/pkg/quicli"
 	"github.com/ariary/soa/internal/analyzer"
 	"github.com/ariary/soa/internal/config"
+	"github.com/ariary/soa/internal/feed"
 	"github.com/ariary/soa/internal/manager"
 	"github.com/ariary/soa/internal/orchestrator"
 	"github.com/ariary/soa/internal/provider"
@@ -26,10 +32,13 @@ func main() {
 			{Name: "pip", Default: true, Description: "intercept pip package downloads"},
 			{Name: "rubygems", Default: true, Description: "intercept RubyGems downloads"},
 			{Name: "port", Default: 0, Description: "port to listen on (overrides config)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"serve"}},
+			{Name: "interval", Default: "5m", Description: "feed polling interval", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
+			{Name: "ecosystem", Default: "", Description: "filter by ecosystem (npm,pypi,go,rubygems)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
 		},
 		Function: proxyCmd,
 		Subcommands: quicli.Subcommands{
 			{Name: "serve", Description: "Start the soa reference check server", Function: serveCmd},
+			{Name: "feed", Description: "Live feed of malicious package advisories from osv.dev", Function: feedCmd},
 		},
 	}
 
@@ -62,8 +71,24 @@ func serveCmd(cfg_parsed quicli.Config) {
 		"rubygems": "https://rubygems.org",
 	}
 
+	// Resolve GitHub token for GHSA malware checks
+	serverGithubToken := ""
+	if cfg.Server.Rules.Analysis.GitHubTokenEnv != "" {
+		serverGithubToken = os.Getenv(cfg.Server.Rules.Analysis.GitHubTokenEnv)
+	}
+	if serverGithubToken == "" {
+		serverGithubToken = os.Getenv("GITHUB_TOKEN")
+	}
+
 	fmt.Fprintf(os.Stderr, "[soa] check server starting on :%d\n", cfg.Server.Port)
 	s := server.NewServer(cfg.Server.Rules, expandedCachePath, upstreams)
+
+	if serverGithubToken != "" {
+		s.SetGithubToken(serverGithubToken)
+		fmt.Fprintf(os.Stderr, "[soa] known malware check: osv.dev + GHSA\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "[soa] known malware check: osv.dev (set GITHUB_TOKEN to enable GHSA)\n")
+	}
 
 	if cfg.Server.Rules.Analysis.Enabled {
 		llm, err := provider.New(cfg.Server.Rules.Analysis)
@@ -121,4 +146,61 @@ func proxyCmd(cfg_parsed quicli.Config) {
 
 	exitCode := orchestrator.Run(cfg, managers, args, os.Environ(), isTTY, verbose)
 	os.Exit(exitCode)
+}
+
+func feedCmd(cfg_parsed quicli.Config) {
+	intervalStr := cfg_parsed.GetStringFlag("interval")
+	interval, err := time.ParseDuration(intervalStr)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "[soa] invalid interval %q: %v\n", intervalStr, err)
+		os.Exit(1)
+	}
+
+	var ecosystems []string
+	if eco := cfg_parsed.GetStringFlag("ecosystem"); eco != "" {
+		ecosystems = strings.Split(eco, ",")
+	}
+
+	home, _ := os.UserHomeDir()
+	statePath := home + "/.config/soa/feed-state.json"
+
+	// Ensure state directory exists
+	if dir := filepath.Dir(statePath); dir != "" {
+		os.MkdirAll(dir, 0755)
+	}
+
+	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
+
+	// Resolve GitHub token for GHSA feed (optional)
+	appCfg := config.Load()
+	githubToken := ""
+	if appCfg.Server.Rules.Analysis.GitHubTokenEnv != "" {
+		githubToken = os.Getenv(appCfg.Server.Rules.Analysis.GitHubTokenEnv)
+	}
+	if githubToken == "" {
+		githubToken = os.Getenv("GITHUB_TOKEN")
+	}
+
+	cfg := feed.Config{
+		Interval:    interval,
+		Ecosystems:  ecosystems,
+		StatePath:   statePath,
+		GithubToken: githubToken,
+	}
+
+	sources := "osv.dev"
+	if githubToken != "" {
+		sources += " + GHSA"
+	} else {
+		sources += " (set GITHUB_TOKEN to enable GHSA)"
+	}
+	fmt.Fprintf(os.Stderr, "[soa] feed started (polling every %s, sources: %s)\n", interval, sources)
+
+	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer cancel()
+
+	if err := feed.Run(ctx, cfg, os.Stdout, !isTTY); err != nil && err != context.Canceled {
+		fmt.Fprintf(os.Stderr, "[soa] feed error: %v\n", err)
+		os.Exit(1)
+	}
 }

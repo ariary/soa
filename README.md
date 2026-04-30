@@ -84,11 +84,46 @@ you ─► soa ─► local proxy ─► check server ─► allow/block
 
 The check server enforces rules in order. A package must pass all enabled rules to be allowed.
 
+**Known malware**: checks the package against known malicious package databases before anything else. If the package+version is a known supply chain attack, it gets blocked instantly. Always on, no config needed.
+- [osv.dev](https://osv.dev) MAL-* advisories ([OpenSSF](https://github.com/ossf/malicious-packages)) — always active
+- [GitHub Advisory Database](https://github.com/advisories) MALWARE classification — enabled when `GITHUB_TOKEN` is set
+
 **Max age**: the package version must have been published at least N days ago. Catches brand new malicious releases before they gain trust. Enabled by default, 7 days.
 
 **Min versions**: the package must have at least N released versions. A single version package with no history is suspicious. Enabled by default, minimum 2.
 
 **Analysis**: send the package to an LLM for malware detection. Code analysis and release metadata checks run in parallel. If either flags the package, it gets blocked immediately. Off by default. See [docs/malware-analysis.md](docs/malware-analysis.md) for setup.
+
+## Feed
+
+`soa feed` monitors for new malicious package advisories and prints them to your terminal in real-time:
+
+```bash
+soa feed
+```
+
+```
+[soa] feed started (polling every 5m, sources: osv.dev + GHSA)
+[MAL-2025-49286] npm / gunpowder-ghost@209.0.0, 217.0.0, 213.0.0, 212.0.0, 211.0.0, 225.0.0
+  Malicious code in gunpowder-ghost (npm)
+  2026-04-30  https://osv.dev/vulnerability/MAL-2025-49286
+---
+[GHSA-5w4c-85pv-cwhv] npm / tanstack@2.0.7
+  Malware in tanstack
+  2026-04-29  https://github.com/advisories/GHSA-5w4c-85pv-cwhv
+---
+```
+
+Filter by ecosystem and tune the interval:
+```bash
+soa feed --ecosystem npm,pypi --interval 1m
+```
+
+Two sources, deduplicated:
+- **osv.dev MAL-*** ([OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages)) — always on, no token needed
+- **GitHub Advisory Database** (GHSA `MALWARE` classification) — enabled when `GITHUB_TOKEN` is set
+
+State is persisted across restarts — you won't see the same advisory twice.
 
 ## Knobs
 
