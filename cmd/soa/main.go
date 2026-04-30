@@ -71,8 +71,24 @@ func serveCmd(cfg_parsed quicli.Config) {
 		"rubygems": "https://rubygems.org",
 	}
 
+	// Resolve GitHub token for GHSA malware checks
+	serverGithubToken := ""
+	if cfg.Server.Rules.Analysis.GitHubTokenEnv != "" {
+		serverGithubToken = os.Getenv(cfg.Server.Rules.Analysis.GitHubTokenEnv)
+	}
+	if serverGithubToken == "" {
+		serverGithubToken = os.Getenv("GITHUB_TOKEN")
+	}
+
 	fmt.Fprintf(os.Stderr, "[soa] check server starting on :%d\n", cfg.Server.Port)
 	s := server.NewServer(cfg.Server.Rules, expandedCachePath, upstreams)
+
+	if serverGithubToken != "" {
+		s.SetGithubToken(serverGithubToken)
+		fmt.Fprintf(os.Stderr, "[soa] known malware check: osv.dev + GHSA\n")
+	} else {
+		fmt.Fprintf(os.Stderr, "[soa] known malware check: osv.dev (set GITHUB_TOKEN to enable GHSA)\n")
+	}
 
 	if cfg.Server.Rules.Analysis.Enabled {
 		llm, err := provider.New(cfg.Server.Rules.Analysis)
@@ -175,6 +191,8 @@ func feedCmd(cfg_parsed quicli.Config) {
 	sources := "osv.dev"
 	if githubToken != "" {
 		sources += " + GHSA"
+	} else {
+		sources += " (set GITHUB_TOKEN to enable GHSA)"
 	}
 	fmt.Fprintf(os.Stderr, "[soa] feed started (polling every %s, sources: %s)\n", interval, sources)
 

@@ -84,7 +84,9 @@ you ─► soa ─► local proxy ─► check server ─► allow/block
 
 The check server enforces rules in order. A package must pass all enabled rules to be allowed.
 
-**Known malware**: checks the package against [osv.dev](https://osv.dev)'s malicious package database (MAL-* advisories from [OpenSSF](https://github.com/ossf/malicious-packages)). If the exact package+version is a known supply chain attack, it gets blocked instantly. Always on, no config needed.
+**Known malware**: checks the package against known malicious package databases before anything else. If the package+version is a known supply chain attack, it gets blocked instantly. Always on, no config needed.
+- [osv.dev](https://osv.dev) MAL-* advisories ([OpenSSF](https://github.com/ossf/malicious-packages)) — always active
+- [GitHub Advisory Database](https://github.com/advisories) MALWARE classification — enabled when `GITHUB_TOKEN` is set
 
 **Max age**: the package version must have been published at least N days ago. Catches brand new malicious releases before they gain trust. Enabled by default, 7 days.
 

@@ -454,3 +454,54 @@ func TestMinVersions_FailClosed(t *testing.T) {
 		t.Errorf("expected blocked on upstream error, got %s", cr.Status)
 	}
 }
+
+func TestMatchVersionRange(t *testing.T) {
+	tests := []struct {
+		version  string
+		rangeStr string
+		want     bool
+	}{
+		// Exact match
+		{"2.0.7", "= 2.0.7", true},
+		{"2.0.6", "= 2.0.7", false},
+		// All versions
+		{"1.0.0", ">= 0", true},
+		{"99.99.99", ">= 0", true},
+		// Range
+		{"1.5.0", ">= 1.0.0, < 2.0.0", true},
+		{"2.0.0", ">= 1.0.0, < 2.0.0", false},
+		{"0.9.0", ">= 1.0.0, < 2.0.0", false},
+		// Upper bound only
+		{"1.0.0", "< 2.0.0", true},
+		{"2.0.0", "< 2.0.0", false},
+		// Lower bound only
+		{"1.0.0", ">= 1.0.0", true},
+		{"0.9.0", ">= 1.0.0", false},
+	}
+	for _, tt := range tests {
+		got := matchVersionRange(tt.version, tt.rangeStr)
+		if got != tt.want {
+			t.Errorf("matchVersionRange(%q, %q) = %v, want %v", tt.version, tt.rangeStr, got, tt.want)
+		}
+	}
+}
+
+func TestCompareVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"1.0.0", "1.0.0", 0},
+		{"1.0.1", "1.0.0", 1},
+		{"1.0.0", "1.0.1", -1},
+		{"2.0.0", "1.99.99", 1},
+		{"1.0", "1.0.0", 0},
+		{"0", "0.0.0", 0},
+	}
+	for _, tt := range tests {
+		got := compareVersions(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
