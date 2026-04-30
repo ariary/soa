@@ -44,6 +44,9 @@ func TestRubyGemsInjectEnv(t *testing.T) {
 	if found["GEM_HOST"] != "http://localhost:8080/rubygems" {
 		t.Errorf("GEM_HOST not overridden, got %s", found["GEM_HOST"])
 	}
+	if found["HOME"] != "/home/user" {
+		t.Errorf("HOME should be preserved, got %q", found["HOME"])
+	}
 }
 
 func TestRubyGemsMatch(t *testing.T) {
@@ -120,5 +123,52 @@ func TestRubyGemsUpstreamURL(t *testing.T) {
 	want := "https://rubygems.org/gems/rails-7.1.3.gem"
 	if got != want {
 		t.Errorf("UpstreamURL = %s, want %s", got, want)
+	}
+}
+
+func TestRubyGemsDetect_EmptyValue(t *testing.T) {
+	// GEM_HOST= (empty value) should fall through to default.
+	env := []string{"HOME=/home/user", "GEM_HOST=", "PATH=/usr/bin"}
+	m := &RubyGemsManager{}
+	upstream, active := m.Detect(env)
+	if !active {
+		t.Fatal("expected active with default")
+	}
+	if upstream != "https://rubygems.org" {
+		t.Errorf("expected default upstream when GEM_HOST is empty, got %s", upstream)
+	}
+}
+
+func TestParseGemFilename(t *testing.T) {
+	tests := []struct {
+		filename    string
+		wantName    string
+		wantVersion string
+	}{
+		// No hyphen at all: returns full name (minus .gem), empty version
+		{"rails.gem", "rails", ""},
+		// Hyphen at end followed by non-digit: no version match
+		{"rails-.gem", "rails-", ""},
+		// Hyphen followed by letter (not digit): no version found
+		{"my-gem-abc.gem", "my-gem-abc", ""},
+		// Digit exactly '0' after hyphen
+		{"mygem-0.1.0.gem", "mygem", "0.1.0"},
+		// Digit exactly '9' after hyphen
+		{"mygem-9.0.0.gem", "mygem", "9.0.0"},
+		// Multiple hyphens, last one before digit wins (scans from right)
+		{"rack-test-2.1.0.gem", "rack-test", "2.1.0"},
+		// Hyphen at position 0 followed by digit
+		{"-1.0.0.gem", "", "1.0.0"},
+		// Normal case
+		{"nokogiri-1.16.0.gem", "nokogiri", "1.16.0"},
+	}
+	for _, tt := range tests {
+		name, version := parseGemFilename(tt.filename)
+		if name != tt.wantName {
+			t.Errorf("parseGemFilename(%q) name = %q, want %q", tt.filename, name, tt.wantName)
+		}
+		if version != tt.wantVersion {
+			t.Errorf("parseGemFilename(%q) version = %q, want %q", tt.filename, version, tt.wantVersion)
+		}
 	}
 }

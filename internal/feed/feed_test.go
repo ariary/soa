@@ -969,3 +969,356 @@ func TestFirstLine(t *testing.T) {
 		}
 	}
 }
+
+// --- Mutation-killing tests below ---
+
+func TestParseMALEntries_CommaAtStart(t *testing.T) {
+	// Comma at index 0: timestamp part is empty, so time.Parse should fail → skip.
+	// Kills mutant: comma < 0 → comma <= 0 (boundary at position 0).
+	csv := ",npm/MAL-2026-9999\n2026-04-30T15:00:00Z,npm/MAL-2026-1111\n"
+	entries := parseMALEntries([]byte(csv), time.Time{})
+	// The first line has comma at index 0 → empty timestamp → time.Parse fails → skipped.
+	// The second line is valid.
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry (skip comma-at-start line), got %d", len(entries))
+	}
+	if entries[0].ID != "MAL-2026-1111" {
+		t.Errorf("expected MAL-2026-1111, got %s", entries[0].ID)
+	}
+}
+
+func TestParseMALEntries_SlashAtStart(t *testing.T) {
+	// Slash at index 0 in the ref: ecosystem would be empty string.
+	// Kills mutant: slash < 0 → slash <= 0 (boundary at position 0).
+	csv := "2026-04-30T15:00:00Z,/MAL-2026-8888\n2026-04-30T14:00:00Z,npm/MAL-2026-7777\n"
+	entries := parseMALEntries([]byte(csv), time.Time{})
+	// First line: ref is "/MAL-2026-8888", slash at 0 → should still parse (original code: slash < 0 skips).
+	// With the mutant (slash <= 0), it would be skipped. So we need the entry to be included.
+	// Original behavior: slash=0 → not < 0 → continues → ecosystem="" id="MAL-2026-8888"
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 entries (slash at 0 is valid in original code), got %d", len(entries))
+	}
+	if entries[0].Ecosystem != "" {
+		t.Errorf("expected empty ecosystem for slash-at-start, got %q", entries[0].Ecosystem)
+	}
+	if entries[0].ID != "MAL-2026-8888" {
+		t.Errorf("expected MAL-2026-8888, got %s", entries[0].ID)
+	}
+}
+
+func TestFetchRecentMALIDs_PartialContent206(t *testing.T) {
+	// Server returns 206 Partial Content — should be accepted.
+	// Kills mutant: resp.StatusCode != http.StatusPartialContent negation.
+	body := "2026-04-30T15:37:33.526586Z,npm/MAL-2025-49286\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPartialContent)
+		w.Write([]byte(body))
+	}))
+	defer srv.Close()
+
+	entries, err := fetchRecentMALIDs(context.Background(), srv.URL, time.Time{})
+	if err != nil {
+		t.Fatalf("expected no error for 206, got: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(entries))
+	}
+	if entries[0].ID != "MAL-2025-49286" {
+		t.Errorf("expected MAL-2025-49286, got %s", entries[0].ID)
+	}
+}
+
+func TestFetchRecentMALIDs_RejectsNon200Non206(t *testing.T) {
+	// Ensure non-200/206 status codes are rejected.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+	}))
+	defer srv.Close()
+
+	_, err := fetchRecentMALIDs(context.Background(), srv.URL, time.Time{})
+	if err == nil {
+		t.Fatal("expected error for 403 status")
+	}
+}
+
+func TestRenderAdvisory_NoAffected(t *testing.T) {
+	// Advisory with empty Affected slice — should render just the ID.
+	// Kills mutant: len(adv.Affected) == 0 negation.
+	adv := Advisory{
+		ID:       "MAL-2026-EMPTY",
+		Summary:  "No affected packages",
+		Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		Affected: []AffectedPackage{},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, RenderConfig{Plain: true})
+	out := buf.String()
+
+	if !strings.Contains(out, "[MAL-2026-EMPTY]") {
+		t.Errorf("expected [MAL-2026-EMPTY] for no-affected advisory, got:\n%s", out)
+	}
+	// Should not contain ecosystem/package line format
+	if strings.Contains(out, " / ") {
+		t.Errorf("should not have ecosystem/package separator when no affected, got:\n%s", out)
+	}
+}
+
+func TestRenderAdvisory_NoAffected_Nil(t *testing.T) {
+	// Advisory with nil Affected — should also render just the ID.
+	adv := Advisory{
+		ID:       "MAL-2026-NIL",
+		Summary:  "Nil affected",
+		Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, RenderConfig{Plain: true})
+	out := buf.String()
+
+	if !strings.Contains(out, "[MAL-2026-NIL]") {
+		t.Errorf("expected [MAL-2026-NIL], got:\n%s", out)
+	}
+}
+
+func TestRenderAdvisory_LongVersionsTruncation(t *testing.T) {
+	// Test boundary: versions string exactly 60 chars should NOT be truncated.
+	// Versions string >60 chars SHOULD be truncated to 57+"...".
+	// Kills mutant: len(versions) > 60 boundary.
+
+	// Build a versions string of exactly 60 characters
+	// "1.0.0" is 5 chars, ", " is 2 chars → "1.0.0, 1.0.0, ..." pattern
+	// We need to control the exact length.
+	exact60 := strings.Repeat("x", 60) // 60 chars exactly
+	over60 := strings.Repeat("x", 61)  // 61 chars
+
+	t.Run("exactly_60_chars_not_truncated", func(t *testing.T) {
+		adv := Advisory{
+			ID:       "MAL-EXACT60",
+			Summary:  "Test",
+			Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+			Affected: []AffectedPackage{
+				{Package: osvPackage{Ecosystem: "npm", Name: "pkg"}, Versions: []string{exact60}},
+			},
+		}
+		var buf bytes.Buffer
+		renderAdvisory(&buf, adv, RenderConfig{Plain: true})
+		out := buf.String()
+		if strings.Contains(out, "...") {
+			t.Errorf("versions of exactly 60 chars should NOT be truncated, got:\n%s", out)
+		}
+		if !strings.Contains(out, exact60) {
+			t.Errorf("expected full 60-char version string in output, got:\n%s", out)
+		}
+	})
+
+	t.Run("over_60_chars_truncated", func(t *testing.T) {
+		adv := Advisory{
+			ID:       "MAL-OVER60",
+			Summary:  "Test",
+			Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+			Affected: []AffectedPackage{
+				{Package: osvPackage{Ecosystem: "npm", Name: "pkg"}, Versions: []string{over60}},
+			},
+		}
+		var buf bytes.Buffer
+		renderAdvisory(&buf, adv, RenderConfig{Plain: true})
+		out := buf.String()
+		if !strings.Contains(out, "...") {
+			t.Errorf("versions over 60 chars should be truncated, got:\n%s", out)
+		}
+		if strings.Contains(out, over60) {
+			t.Errorf("full 61-char version string should NOT appear in output, got:\n%s", out)
+		}
+	})
+}
+
+func TestFilterGHSAByEcosystem_EmptyFilter(t *testing.T) {
+	// Empty ecosystems slice → all advisories returned.
+	// Kills mutant: len(ecosystems) == 0 negation.
+	advisories := []Advisory{
+		{ID: "GHSA-1", Affected: []AffectedPackage{{Package: osvPackage{Ecosystem: "npm", Name: "a"}}}},
+		{ID: "GHSA-2", Affected: []AffectedPackage{{Package: osvPackage{Ecosystem: "PyPI", Name: "b"}}}},
+	}
+	result := filterGHSAByEcosystem(advisories, []string{})
+	if len(result) != 2 {
+		t.Fatalf("expected all 2 advisories with empty filter, got %d", len(result))
+	}
+}
+
+func TestFilterGHSAByEcosystem_NilFilter(t *testing.T) {
+	advisories := []Advisory{
+		{ID: "GHSA-1", Affected: []AffectedPackage{{Package: osvPackage{Ecosystem: "npm", Name: "a"}}}},
+	}
+	result := filterGHSAByEcosystem(advisories, nil)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 advisory with nil filter, got %d", len(result))
+	}
+}
+
+func TestFilterGHSAByEcosystem_WithFilter(t *testing.T) {
+	// Filtering should only return matching advisories.
+	advisories := []Advisory{
+		{ID: "GHSA-1", Affected: []AffectedPackage{{Package: osvPackage{Ecosystem: "npm", Name: "a"}}}},
+		{ID: "GHSA-2", Affected: []AffectedPackage{{Package: osvPackage{Ecosystem: "PyPI", Name: "b"}}}},
+		{ID: "GHSA-3", Affected: []AffectedPackage{{Package: osvPackage{Ecosystem: "Go", Name: "c"}}}},
+	}
+	result := filterGHSAByEcosystem(advisories, []string{"npm"})
+	if len(result) != 1 {
+		t.Fatalf("expected 1 advisory matching npm, got %d", len(result))
+	}
+	if result[0].ID != "GHSA-1" {
+		t.Errorf("expected GHSA-1, got %s", result[0].ID)
+	}
+}
+
+func TestRenderAdvisory_InfoFull_EmptyDetails(t *testing.T) {
+	// Full mode with Details == Summary — details should NOT be shown (they're redundant).
+	adv := Advisory{
+		ID:       "MAL-2026-FULLDUP",
+		Summary:  "Malicious package steals tokens",
+		Details:  "Malicious package steals tokens",
+		Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		Affected: []AffectedPackage{
+			{Package: osvPackage{Ecosystem: "npm", Name: "dup-pkg"}, Versions: []string{"1.0.0"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, RenderConfig{Plain: true, Level: InfoFull})
+	out := buf.String()
+
+	if strings.Contains(out, "details:") {
+		t.Errorf("details should not be shown when equal to summary, got:\n%s", out)
+	}
+}
+
+func TestRenderAdvisory_InfoFull_NoAliases(t *testing.T) {
+	// Full mode with empty aliases — "aliases:" line should not appear.
+	// Kills mutant: len(adv.Aliases) > 0 boundary.
+	adv := Advisory{
+		ID:       "MAL-2026-NOALIAS",
+		Summary:  "No aliases",
+		Details:  "Different from summary",
+		Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		Aliases:  []string{},
+		Affected: []AffectedPackage{
+			{Package: osvPackage{Ecosystem: "npm", Name: "no-alias-pkg"}, Versions: []string{"1.0.0"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, RenderConfig{Plain: true, Level: InfoFull})
+	out := buf.String()
+
+	if strings.Contains(out, "aliases:") {
+		t.Errorf("aliases should not appear when empty, got:\n%s", out)
+	}
+}
+
+func TestRenderAdvisory_InfoFull_NoReferences(t *testing.T) {
+	// Full mode with empty references — "references:" line should not appear.
+	// Kills mutant: len(adv.References) > 0 boundary.
+	adv := Advisory{
+		ID:       "MAL-2026-NOREF",
+		Summary:  "No references",
+		Details:  "Different from summary",
+		Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		Aliases:  []string{"CVE-2026-9999"},
+		Affected: []AffectedPackage{
+			{Package: osvPackage{Ecosystem: "npm", Name: "no-ref-pkg"}, Versions: []string{"1.0.0"}},
+		},
+		References: []Reference{},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, RenderConfig{Plain: true, Level: InfoFull})
+	out := buf.String()
+
+	if strings.Contains(out, "references:") {
+		t.Errorf("references should not appear when empty, got:\n%s", out)
+	}
+	// Aliases should still be present
+	if !strings.Contains(out, "aliases:") {
+		t.Errorf("aliases should appear, got:\n%s", out)
+	}
+}
+
+func TestRenderAdvisory_InfoFull_WithAliasesAndReferences(t *testing.T) {
+	// Full mode with non-empty aliases and references — both should appear.
+	adv := Advisory{
+		ID:       "MAL-2026-FULLREF",
+		Summary:  "Has everything",
+		Details:  "Extended details here",
+		Modified: time.Date(2026, 4, 30, 0, 0, 0, 0, time.UTC),
+		Aliases:  []string{"CVE-2026-1234"},
+		Affected: []AffectedPackage{
+			{Package: osvPackage{Ecosystem: "npm", Name: "full-pkg"}, Versions: []string{"1.0.0"}},
+		},
+		References: []Reference{
+			{Type: "ADVISORY", URL: "https://example.com/adv"},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, RenderConfig{Plain: true, Level: InfoFull})
+	out := buf.String()
+
+	if !strings.Contains(out, "aliases:") {
+		t.Errorf("expected aliases section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "CVE-2026-1234") {
+		t.Errorf("expected alias value, got:\n%s", out)
+	}
+	if !strings.Contains(out, "references:") {
+		t.Errorf("expected references section, got:\n%s", out)
+	}
+	if !strings.Contains(out, "https://example.com/adv") {
+		t.Errorf("expected reference URL, got:\n%s", out)
+	}
+}
+
+func TestFormatOSVField_EmptyArrays(t *testing.T) {
+	// Empty arrays for aliases/severity/credits/references should return fallback.
+	// Kills mutant: len(arr) > 0 boundary.
+	tests := []struct {
+		field string
+		raw   string
+		want  string
+	}{
+		{"aliases", `[]`, "[]"},
+		{"severity", `[]`, "[]"},
+		{"credits", `[]`, "[]"},
+		{"references", `[]`, "[]"},
+		{"related", `[]`, "[]"},
+	}
+	for _, tt := range tests {
+		got := formatOSVField(tt.field, json.RawMessage(tt.raw))
+		if got != tt.want {
+			t.Errorf("formatOSVField(%q, %s) = %q, want %q", tt.field, tt.raw, got, tt.want)
+		}
+	}
+}
+
+func TestFirstLine_FrontmatterBoundary(t *testing.T) {
+	// Test edge case: "---" appears at position 0 of the remaining content after skipping the first "---".
+	// Kills mutant: end >= 0 boundary for firstLine frontmatter parsing.
+
+	// Case: frontmatter with content right after closing ---
+	got := firstLine("---\nfoo: bar\n---\ncontent after")
+	if got != "content after" {
+		t.Errorf("expected 'content after', got %q", got)
+	}
+
+	// Case: "---" immediately (no actual frontmatter body between delimiters)
+	got = firstLine("------\ncontent")
+	if got != "content" {
+		t.Errorf("expected 'content', got %q", got)
+	}
+
+	// Case: only frontmatter, no closing delimiter → end < 0 → treated as regular text
+	got = firstLine("---\nno closing delimiter")
+	if got != "---" {
+		t.Errorf("expected '---' (no closing found, first line returned), got %q", got)
+	}
+}

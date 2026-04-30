@@ -176,3 +176,45 @@ func TestClientNoToken(t *testing.T) {
 		t.Fatalf("FetchRepoInfo without token: %v", err)
 	}
 }
+
+func TestClientTimeout(t *testing.T) {
+	// The client timeout is 30 * time.Second. If the arithmetic mutant changes
+	// this to 30 + time.Second (= 31ns) or 30 / time.Second (= 0), then a
+	// request to a server that introduces a small delay will fail.
+	mux := http.NewServeMux()
+	mux.HandleFunc("/repos/owner1/repo1", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(50 * time.Millisecond)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"owner":            map[string]string{"login": "owner1"},
+			"stargazers_count": 42,
+			"forks_count":      7,
+			"created_at":       "2024-01-01T00:00:00Z",
+		})
+	})
+
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := NewClient(srv.URL, "test-token")
+	info, err := c.FetchRepoInfo(context.Background(), "owner1", "repo1")
+	if err != nil {
+		t.Fatalf("FetchRepoInfo should succeed with 30s timeout, got error: %v", err)
+	}
+	if info.Stars != 42 {
+		t.Errorf("Stars = %d, want 42", info.Stars)
+	}
+}
+
+func TestNewClientDefaultBaseURL(t *testing.T) {
+	c := NewClient("", "tok")
+	if c.baseURL != "https://api.github.com" {
+		t.Errorf("expected default baseURL %q, got %q", "https://api.github.com", c.baseURL)
+	}
+}
+
+func TestNewClientTrimsTrailingSlash(t *testing.T) {
+	c := NewClient("https://api.github.com/", "tok")
+	if c.baseURL != "https://api.github.com" {
+		t.Errorf("expected baseURL without trailing slash, got %q", c.baseURL)
+	}
+}

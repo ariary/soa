@@ -553,3 +553,240 @@ func TestCheckOSVMalware_SkipsWithdrawnKeepsActive(t *testing.T) {
 		t.Errorf("expected MAL-2026-ACTIVE (skip withdrawn), got %q", id)
 	}
 }
+
+// TestCheckBlocked_KnownMalware exercises the handleCheck malware check path
+// where checkKnownMalware returns a non-empty advisoryID, killing the
+// CONDITIONALS_NEGATION mutant on `advisoryID != ""` (server.go:103:98).
+func TestCheckBlocked_KnownMalware(t *testing.T) {
+	// Mock OSV server that returns an active MAL advisory.
+	osvMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"vulns":[{"id":"MAL-2026-7777"}]}`))
+	}))
+	defer osvMock.Close()
+
+	// Upstream Go proxy mock (needed for the server to start).
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/@v/list") {
+			fmt.Fprintln(w, "v1.0.0")
+			return
+		}
+		json.NewEncoder(w).Encode(map[string]any{
+			"Version": "v1.0.0",
+			"Time":    time.Now().AddDate(0, -6, 0).Format(time.RFC3339),
+		})
+	}))
+	defer upstream.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "approved.json")
+	rules := config.RulesConfig{
+		MaxAge: config.MaxAgeRule{Enabled: true, MinDays: 7},
+	}
+	s := NewServer(rules, cachePath, map[string]string{"go": upstream.URL})
+	s.osvQueryURL = osvMock.URL
+	srv := httptest.NewServer(s.Handler())
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/evil/pkg", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusBlocked {
+		t.Errorf("expected blocked for known malware, got %s", cr.Status)
+	}
+	if !strings.Contains(cr.Reason, "MAL-2026-7777") {
+		t.Errorf("expected reason to mention advisory ID, got %q", cr.Reason)
+	}
+}
+
+// TestCheckAllowed_ExactBoundary exercises the age boundary: a package published
+// exactly MinDays ago should be allowed because age == maxAge means age < maxAge
+// is false. Kills the CONDITIONALS_BOUNDARY mutant on `age < maxAge` (server.go:155:10)
+// and the ARITHMETIC_BASE mutant on `age.Hours() / 24` (server.go:156:28).
+func TestCheckAllowed_ExactBoundary(t *testing.T) {
+	// Package published exactly 7 days ago.
+	publishTime := time.Now().Add(-7 * 24 * time.Hour)
+	_, srv := newTestServer(t, 7, publishTime)
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusAllowed {
+		t.Errorf("expected allowed when age == maxAge (exact boundary), got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+// TestAnalysisEnabled_NoAnalyzers_Passthrough exercises the analysis guard:
+// when analysis.Enabled is true but no analyzers are set (len(s.analyzers) == 0),
+// the code should skip analysis and allow the package. Kills the
+// CONDITIONALS_BOUNDARY mutant on `len(s.analyzers) > 0` (server.go:168:50).
+func TestAnalysisEnabled_NoAnalyzers_Passthrough(t *testing.T) {
+	rules := config.RulesConfig{
+		MaxAge:   config.MaxAgeRule{Enabled: true, MinDays: 7},
+		Analysis: config.AnalysisRule{Enabled: true},
+	}
+	// Package published 6 months ago to pass max_age.
+	// Do NOT call SetAnalyzers - analyzers slice stays nil/empty.
+	_, srv := newTestServerWithRules(t, rules, time.Now().AddDate(0, -6, 0))
+	defer srv.Close()
+
+	body, _ := json.Marshal(checkapi.CheckRequest{Ecosystem: "go", Module: "github.com/foo/bar", Version: "v1.0.0"})
+	resp, err := http.Post(srv.URL+"/check", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+
+	var cr checkapi.CheckResponse
+	json.NewDecoder(resp.Body).Decode(&cr)
+	if cr.Status != checkapi.StatusAllowed {
+		t.Errorf("expected allowed when analysis enabled but no analyzers, got %s: %s", cr.Status, cr.Reason)
+	}
+}
+
+// TestCompareVersions_UnequalLengths exercises the boundary conditions in
+// compareVersions where bParts has more segments than aParts and vice versa.
+// Kills the CONDITIONALS_BOUNDARY mutants on `len(bParts) > maxLen`
+// (server.go:426:17) and `i < len(bParts)` (server.go:435:8).
+func TestCompareVersions_UnequalLengths(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		// bParts longer than aParts, trailing non-zero → a < b
+		{"1.0", "1.0.1", -1},
+		// aParts longer than bParts, trailing non-zero → a > b
+		{"1.0.1", "1.0", 1},
+		// bParts longer but trailing zero → equal
+		{"1.0", "1.0.0", 0},
+		// aParts much longer, trailing zeros → equal
+		{"1.0.0.0", "1.0", 0},
+		// bParts much longer, small difference in extra segment
+		{"2", "2.0.0.1", -1},
+	}
+	for _, tt := range tests {
+		got := compareVersions(tt.a, tt.b)
+		if got != tt.want {
+			t.Errorf("compareVersions(%q, %q) = %d, want %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}
+
+// TestMatchSingleConstraint_BoundaryValues exercises strict and inclusive
+// comparison operators at exact boundary values. Kills mutants around
+// the comparison result checks in matchSingleConstraint.
+func TestMatchSingleConstraint_BoundaryValues(t *testing.T) {
+	tests := []struct {
+		version    string
+		constraint string
+		want       bool
+	}{
+		// "> 1.0.0" with version "1.0.0" → false (equal, not greater)
+		{"1.0.0", "> 1.0.0", false},
+		// "> 1.0.0" with version "1.0.1" → true
+		{"1.0.1", "> 1.0.0", true},
+		// "<= 1.0.0" with version "1.0.0" → true (equal is included)
+		{"1.0.0", "<= 1.0.0", true},
+		// "<= 1.0.0" with version "1.0.1" → false
+		{"1.0.1", "<= 1.0.0", false},
+		// "<= 1.0.0" with version "0.9.0" → true
+		{"0.9.0", "<= 1.0.0", true},
+		// "> 1.0.0" with version "0.9.0" → false
+		{"0.9.0", "> 1.0.0", false},
+	}
+	for _, tt := range tests {
+		got := matchSingleConstraint(tt.version, tt.constraint)
+		if got != tt.want {
+			t.Errorf("matchSingleConstraint(%q, %q) = %v, want %v", tt.version, tt.constraint, got, tt.want)
+		}
+	}
+}
+
+// TestCheckKnownMalware_GHSAPath exercises the GHSA malware check path in
+// checkKnownMalware when a GitHub token is set. Kills mutants on
+// `s.githubToken != ""` (server.go:248:85), `id != ""` (server.go:250:15),
+// and `err != nil` (server.go:255:19).
+func TestCheckKnownMalware_GHSAPath(t *testing.T) {
+	// OSV mock returns no malware (empty vulns).
+	osvMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"vulns":[]}`))
+	}))
+	defer osvMock.Close()
+
+	// GHSA GraphQL mock returns a MALWARE advisory matching all versions.
+	ghsaMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{
+			"data": {
+				"securityVulnerabilities": {
+					"nodes": [{
+						"advisory": {"ghsaId": "GHSA-xxxx-yyyy-zzzz"},
+						"vulnerableVersionRange": ">= 0"
+					}],
+					"pageInfo": {"hasNextPage": false, "endCursor": ""}
+				}
+			}
+		}`))
+	}))
+	defer ghsaMock.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "approved.json")
+	rules := config.RulesConfig{}
+	s := NewServer(rules, cachePath, map[string]string{"go": "http://unused"})
+	s.osvQueryURL = osvMock.URL
+	s.ghsaGraphQLURL = ghsaMock.URL
+	s.SetGithubToken("fake-token-for-test")
+
+	id, err := s.checkKnownMalware(context.Background(), "go", "github.com/evil/pkg", "1.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "GHSA-xxxx-yyyy-zzzz" {
+		t.Errorf("expected GHSA-xxxx-yyyy-zzzz, got %q", id)
+	}
+}
+
+// TestCheckKnownMalware_GHSASkippedWithoutToken verifies that when no GitHub
+// token is set, the GHSA path is skipped and only OSV is consulted.
+func TestCheckKnownMalware_GHSASkippedWithoutToken(t *testing.T) {
+	// OSV mock returns no malware.
+	osvMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"vulns":[]}`))
+	}))
+	defer osvMock.Close()
+
+	ghsaCalled := false
+	ghsaMock := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ghsaCalled = true
+		w.Write([]byte(`{"data":{"securityVulnerabilities":{"nodes":[],"pageInfo":{"hasNextPage":false}}}}`))
+	}))
+	defer ghsaMock.Close()
+
+	cachePath := filepath.Join(t.TempDir(), "approved.json")
+	rules := config.RulesConfig{}
+	s := NewServer(rules, cachePath, map[string]string{"go": "http://unused"})
+	s.osvQueryURL = osvMock.URL
+	s.ghsaGraphQLURL = ghsaMock.URL
+	// Do NOT set github token.
+
+	id, err := s.checkKnownMalware(context.Background(), "go", "github.com/safe/pkg", "1.0.0")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if id != "" {
+		t.Errorf("expected empty advisory ID, got %q", id)
+	}
+	if ghsaCalled {
+		t.Error("GHSA endpoint should not be called when githubToken is empty")
+	}
+}

@@ -44,6 +44,9 @@ func TestNpmInjectEnv(t *testing.T) {
 	if found["npm_config_registry"] != "http://localhost:8080/npm" {
 		t.Errorf("npm_config_registry not overridden, got %s", found["npm_config_registry"])
 	}
+	if found["HOME"] != "/home/user" {
+		t.Errorf("HOME should be preserved, got %q", found["HOME"])
+	}
 }
 
 func TestNpmMatch(t *testing.T) {
@@ -142,5 +145,41 @@ func TestNpmUpstreamURL(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("UpstreamURL(%s) = %s, want %s", tt.path, got, tt.want)
 		}
+	}
+}
+
+func TestNpmDetect_EmptyValue(t *testing.T) {
+	// npm_config_registry= (empty value) should fall through to default.
+	env := []string{"HOME=/home/user", "npm_config_registry=", "PATH=/usr/bin"}
+	m := &NpmManager{}
+	upstream, active := m.Detect(env)
+	if !active {
+		t.Fatal("expected active with default registry")
+	}
+	if upstream != "https://registry.npmjs.org" {
+		t.Errorf("expected default upstream when npm_config_registry is empty, got %s", upstream)
+	}
+}
+
+func TestNpmParse_TarballAtStart(t *testing.T) {
+	// Path where "/-/" is at position 0 in the trimmed path.
+	// After trimming "/npm/", path becomes "/-/foo-1.0.0.tgz"
+	// idx of "/-/" is 0, which is >= 0, so it enters the tarball branch.
+	// pkgName = path[:0] = ""
+	m := &NpmManager{}
+	r, _ := http.NewRequest("GET", "http://localhost/npm//-/foo-1.0.0.tgz", nil)
+	pkg, err := m.Parse(r)
+	if err != nil {
+		t.Fatalf("Parse should not error, got: %v", err)
+	}
+	// When idx == 0, pkgName is empty string
+	if pkg.Module != "" {
+		t.Errorf("expected empty module when /-/ is at start, got %q", pkg.Module)
+	}
+	if !pkg.Download {
+		t.Error("expected download=true for tarball path")
+	}
+	if pkg.Type != "tgz" {
+		t.Errorf("expected type tgz, got %s", pkg.Type)
 	}
 }
