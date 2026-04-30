@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
@@ -163,4 +164,25 @@ func filterByEcosystem(entries []MALEntry, ecosystems []string) []MALEntry {
 		}
 	}
 	return filtered
+}
+
+type feedState struct {
+	LastSeen time.Time `json:"last_seen"`
+}
+
+func loadState(path string) time.Time {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return time.Time{}
+	}
+	var s feedState
+	if json.Unmarshal(data, &s) != nil {
+		return time.Time{}
+	}
+	return s.LastSeen
+}
+
+func saveState(path string, lastSeen time.Time) {
+	data, _ := json.Marshal(feedState{LastSeen: lastSeen})
+	os.WriteFile(path, data, 0644)
 }

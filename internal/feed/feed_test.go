@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"testing"
 	"time"
 )
@@ -152,5 +153,34 @@ func TestFilterByEcosystem(t *testing.T) {
 	filtered = filterByEcosystem(entries, nil)
 	if len(filtered) != 4 {
 		t.Fatalf("expected 4 (no filter), got %d", len(filtered))
+	}
+}
+
+func TestStatePersistence(t *testing.T) {
+	path := t.TempDir() + "/state.json"
+
+	// No file yet — should return zero time
+	ts := loadState(path)
+	if !ts.IsZero() {
+		t.Fatalf("expected zero time, got %v", ts)
+	}
+
+	// Save and reload
+	now := time.Date(2026, 4, 30, 15, 37, 33, 0, time.UTC)
+	saveState(path, now)
+
+	ts = loadState(path)
+	if !ts.Equal(now) {
+		t.Fatalf("expected %v, got %v", now, ts)
+	}
+}
+
+func TestStatePersistence_CorruptFile(t *testing.T) {
+	path := t.TempDir() + "/state.json"
+	os.WriteFile(path, []byte("not json"), 0644)
+
+	ts := loadState(path)
+	if !ts.IsZero() {
+		t.Fatalf("expected zero time for corrupt file, got %v", ts)
 	}
 }
