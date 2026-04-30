@@ -27,7 +27,7 @@ func main() {
 			{Name: "port", Default: 0, Description: "port to listen on (overrides config)", SharedSubcommand: quicli.SubcommandSet{"serve"}},
 			{Name: "interval", Default: "5m", Description: "feed polling interval", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "ecosystem", Default: "", Description: "filter by ecosystem (npm,pypi,go,rubygems)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
-			{Name: "source", Default: "all", Description: "data sources: all, osv, ghsa (comma-separated)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
+			{Name: "source", Default: "all", Description: "data sources: all, osv, ghsa (comma-separated). GHSA is a subset of osv — use it only if the ~10min head start matters", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "since", Default: "24h", Description: "initial lookback window (e.g. 30m, 4h, 7d, 1M, 1y)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "info", Default: "default", Description: "output detail level: short, default, full", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "field", Default: []string{}, Description: "extra fields to include in output (repeatable: --field details --field severity)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
@@ -229,7 +229,7 @@ func feedCmd(cfg_parsed quicli.Config) {
 
 	// Warn if GHSA is requested but no token
 	if wantGHSA && githubToken == "" {
-		fmt.Fprintf(os.Stderr, "[tonga] warning: GHSA source selected but GITHUB_TOKEN is not set; GHSA feed will be skipped\n")
+		fmt.Fprintf(os.Stderr, "[tonga] warning: GHSA source selected but GITHUB_TOKEN is not set; GHSA feed will be skipped (osv.dev already covers all GHSA MALWARE entries)\n")
 	}
 
 	// Parse --info flag

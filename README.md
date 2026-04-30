@@ -91,8 +91,8 @@ you ─► soa ─► local proxy ─► tonga serve ─► allow/block
 The check server (`tonga serve`) enforces rules in order. A package must pass all enabled rules to be allowed.
 
 **Known malware**: checks the package against known malicious package databases before anything else. If the package+version is a known supply chain attack, it gets blocked instantly. Always on, no config needed.
-- [osv.dev](https://osv.dev) MAL-* advisories ([OpenSSF](https://github.com/ossf/malicious-packages)) — always active
-- [GitHub Advisory Database](https://github.com/advisories) MALWARE classification — enabled when `GITHUB_TOKEN` is set
+- [osv.dev](https://osv.dev) MAL-* advisories ([OpenSSF](https://github.com/ossf/malicious-packages)) — always active, covers all GHSA MALWARE entries plus ~190k more from other detection sources
+- [GitHub Advisory Database](https://github.com/advisories) MALWARE classification — optional, enabled when `GITHUB_TOKEN` is set. Only useful if the ~10-minute propagation delay to osv.dev matters for your threat model
 
 **Max age**: the package version must have been published at least N days ago. Catches brand new malicious releases before they gain trust. Enabled by default, 7 days.
 
@@ -125,9 +125,9 @@ Filter by ecosystem and tune the interval:
 tonga feed --ecosystem npm,pypi --interval 1m
 ```
 
-Two sources, deduplicated:
-- **osv.dev MAL-*** ([OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages)) — always on, no token needed
-- **GitHub Advisory Database** (GHSA `MALWARE` classification) — enabled when `GITHUB_TOKEN` is set
+Two sources, deduplicated (see [docs/osv-vs-ghsa.md](docs/osv-vs-ghsa.md) for the full comparison):
+- **osv.dev MAL-*** ([OpenSSF Malicious Packages](https://github.com/ossf/malicious-packages)) — always on, no token needed. This is a superset of GHSA MALWARE.
+- **GitHub Advisory Database** (GHSA `MALWARE` classification) — optional, enabled when `GITHUB_TOKEN` is set. Gives a ~10-minute head start on GHSA-sourced advisories only.
 
 State is persisted across restarts — you won't see the same advisory twice.
 

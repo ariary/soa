@@ -3,7 +3,7 @@ module github.com/ariary/soa
 go 1.25.5
 
 require (
-	github.com/ariary/quicli v1.5.0
+	github.com/ariary/quicli v1.6.0
 	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
 )
