@@ -30,7 +30,7 @@ func main() {
 			{Name: "source", Default: "all", Description: "data sources: all, osv, ghsa (comma-separated)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "since", Default: "24h", Description: "initial lookback window (e.g. 30m, 4h, 7d, 1M, 1y)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "info", Default: "default", Description: "output detail level: short, default, full", SharedSubcommand: quicli.SubcommandSet{"feed"}},
-			{Name: "osv-field", Default: "", Description: "extra OSV fields to include (comma-separated: details,severity,references,aliases,credits,...)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
+			{Name: "field", Default: []string{}, Description: "extra fields to include in output (repeatable: --field details --field severity)", SharedSubcommand: quicli.SubcommandSet{"feed"}},
 		},
 		Subcommands: quicli.Subcommands{
 			{Name: "serve", Description: "Start the soa reference check server", Function: serveCmd},
@@ -144,20 +144,6 @@ func parseSince(s string) (time.Time, error) {
 	}
 }
 
-func parseCSV(s string) []string {
-	if s == "" {
-		return nil
-	}
-	var out []string
-	for _, f := range strings.Split(s, ",") {
-		f = strings.TrimSpace(f)
-		if f != "" {
-			out = append(out, f)
-		}
-	}
-	return out
-}
-
 func parseInt(s string) (int, error) {
 	n := 0
 	for _, c := range s {
@@ -269,7 +255,7 @@ func feedCmd(cfg_parsed quicli.Config) {
 		EnableGHSA:  wantGHSA,
 		Since:       sinceTime,
 		InfoLevel:   infoLevel,
-		OSVFields:   parseCSV(cfg_parsed.GetStringFlag("osv-field")),
+		OSVFields:   cfg_parsed.GetStringSliceFlag("field"),
 	}
 
 	var sourceLabel string
