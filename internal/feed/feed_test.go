@@ -1,10 +1,12 @@
 package feed
 
 import (
+	"bytes"
 	"context"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"strings"
 	"testing"
 	"time"
 )
@@ -182,5 +184,58 @@ func TestStatePersistence_CorruptFile(t *testing.T) {
 	ts := loadState(path)
 	if !ts.IsZero() {
 		t.Fatalf("expected zero time for corrupt file, got %v", ts)
+	}
+}
+
+func TestRenderAdvisory_Plain(t *testing.T) {
+	adv := Advisory{
+		ID:       "MAL-2025-49286",
+		Summary:  "Malicious package stealing tokens",
+		Modified: time.Date(2025, 10, 31, 0, 0, 0, 0, time.UTC),
+		Affected: []AffectedPackage{
+			{
+				Package:  osvPackage{Ecosystem: "npm", Name: "gunpowder-ghost"},
+				Versions: []string{"209.0.0", "211.0.0", "212.0.0"},
+			},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, true)
+	out := buf.String()
+
+	if !strings.Contains(out, "MAL-2025-49286") {
+		t.Error("missing MAL ID")
+	}
+	if !strings.Contains(out, "npm") {
+		t.Error("missing ecosystem")
+	}
+	if !strings.Contains(out, "gunpowder-ghost") {
+		t.Error("missing package name")
+	}
+	if !strings.Contains(out, "Malicious package stealing tokens") {
+		t.Error("missing summary")
+	}
+	if !strings.Contains(out, "osv.dev/vulnerability/MAL-2025-49286") {
+		t.Error("missing osv.dev link")
+	}
+}
+
+func TestRenderAdvisory_MultipleAffected(t *testing.T) {
+	adv := Advisory{
+		ID:      "MAL-2026-100",
+		Summary: "Bad package",
+		Affected: []AffectedPackage{
+			{Package: osvPackage{Ecosystem: "npm", Name: "pkg-a"}, Versions: []string{"1.0.0"}},
+			{Package: osvPackage{Ecosystem: "npm", Name: "pkg-b"}, Versions: []string{"2.0.0"}},
+		},
+	}
+
+	var buf bytes.Buffer
+	renderAdvisory(&buf, adv, true)
+	out := buf.String()
+
+	if !strings.Contains(out, "pkg-a") || !strings.Contains(out, "pkg-b") {
+		t.Error("should render all affected packages")
 	}
 }

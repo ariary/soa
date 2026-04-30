@@ -186,3 +186,50 @@ func saveState(path string, lastSeen time.Time) {
 	data, _ := json.Marshal(feedState{LastSeen: lastSeen})
 	os.WriteFile(path, data, 0644)
 }
+
+const (
+	colorRed    = "\033[31m"
+	colorYellow = "\033[33m"
+	colorCyan   = "\033[36m"
+	colorDim    = "\033[2m"
+	colorReset  = "\033[0m"
+)
+
+// renderAdvisory writes a formatted advisory block to w.
+// If plain is true, ANSI codes are omitted.
+func renderAdvisory(w io.Writer, adv Advisory, plain bool) {
+	c := func(code, s string) string {
+		if plain {
+			return s
+		}
+		return code + s + colorReset
+	}
+
+	for _, aff := range adv.Affected {
+		versions := strings.Join(aff.Versions, ", ")
+		if len(versions) > 60 {
+			versions = versions[:57] + "..."
+		}
+		pkg := aff.Package.Name
+		if versions != "" {
+			pkg += "@" + versions
+		}
+
+		fmt.Fprintf(w, "[%s] %s / %s\n",
+			c(colorRed, adv.ID),
+			c(colorYellow, aff.Package.Ecosystem),
+			c(colorCyan, pkg))
+	}
+	if len(adv.Affected) == 0 {
+		fmt.Fprintf(w, "[%s]\n", c(colorRed, adv.ID))
+	}
+
+	if adv.Summary != "" {
+		fmt.Fprintf(w, "  %s\n", adv.Summary)
+	}
+
+	date := adv.Modified.Format("2006-01-02")
+	link := "https://osv.dev/vulnerability/" + adv.ID
+	fmt.Fprintf(w, "  %s  %s\n", c(colorDim, date), c(colorDim, link))
+	fmt.Fprintln(w, "---")
+}
