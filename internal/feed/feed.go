@@ -13,6 +13,22 @@ import (
 	"time"
 )
 
+// InfoLevel controls the detail level of advisory output.
+type InfoLevel int
+
+const (
+	InfoDefault InfoLevel = iota // current baseline: ID + summary + date/link
+	InfoShort                    // minimal: ID + ecosystem/package only
+	InfoFull                     // everything: all available fields
+)
+
+// RenderConfig controls advisory output formatting.
+type RenderConfig struct {
+	Plain     bool
+	Level     InfoLevel
+	OSVFields []string // extra OSV fields to display from raw JSON
+}
+
 const csvURL = "https://osv-vulnerabilities.storage.googleapis.com/modified_id.csv"
 const osvAPIBase = "https://api.osv.dev/v1/vulns/"
 const ghGraphQLURL = "https://api.github.com/graphql"
@@ -62,18 +78,45 @@ func parseMALEntries(data []byte, since time.Time) []MALEntry {
 	return entries
 }
 
-// Advisory holds parsed osv.dev vulnerability data.
+// Advisory holds parsed osv.dev vulnerability data (OSV schema).
 type Advisory struct {
-	ID       string            `json:"id"`
-	Summary  string            `json:"summary"`
-	Modified time.Time         `json:"modified"`
-	Affected []AffectedPackage `json:"affected"`
+	ID         string            `json:"id"`
+	Summary    string            `json:"summary"`
+	Details    string            `json:"details"`
+	Aliases    []string          `json:"aliases"`
+	Modified   time.Time         `json:"modified"`
+	Published  time.Time         `json:"published"`
+	Withdrawn  *time.Time        `json:"withdrawn"`
+	Affected   []AffectedPackage `json:"affected"`
+	References []Reference       `json:"references"`
+	Raw        json.RawMessage   `json:"-"` // full OSV JSON for --osv-field extraction
+}
+
+// Reference is a link associated with an advisory.
+type Reference struct {
+	Type string `json:"type"` // ADVISORY, PACKAGE, WEB, etc.
+	URL  string `json:"url"`
 }
 
 // AffectedPackage is one affected entry from an osv.dev advisory.
 type AffectedPackage struct {
-	Package  osvPackage `json:"package"`
-	Versions []string   `json:"versions"`
+	Package  osvPackage     `json:"package"`
+	Versions []string       `json:"versions"`
+	Ranges   []VersionRange `json:"ranges"`
+}
+
+// VersionRange describes affected version ranges (SEMVER, ECOSYSTEM, or GIT).
+type VersionRange struct {
+	Type   string       `json:"type"`
+	Events []RangeEvent `json:"events"`
+}
+
+// RangeEvent is a single event in a version range.
+type RangeEvent struct {
+	Introduced   string `json:"introduced,omitempty"`
+	Fixed        string `json:"fixed,omitempty"`
+	LastAffected string `json:"last_affected,omitempty"`
+	Limit        string `json:"limit,omitempty"`
 }
 
 type osvPackage struct {
@@ -126,10 +169,15 @@ func fetchAdvisory(ctx context.Context, apiBase string, id string) (Advisory, er
 		return Advisory{}, fmt.Errorf("osv.dev returned %d for %s", resp.StatusCode, id)
 	}
 
+	data, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return Advisory{}, fmt.Errorf("reading advisory %s: %w", id, err)
+	}
 	var adv Advisory
-	if err := json.NewDecoder(resp.Body).Decode(&adv); err != nil {
+	if err := json.Unmarshal(data, &adv); err != nil {
 		return Advisory{}, fmt.Errorf("decoding advisory %s: %w", id, err)
 	}
+	adv.Raw = json.RawMessage(data)
 	return adv, nil
 }
 
@@ -236,17 +284,22 @@ func fetchGHSAMalware(ctx context.Context, token string, graphqlURL string, sinc
 
 		for _, node := range result.Data.SecurityAdvisories.Nodes {
 			adv := Advisory{
-				ID:       node.GhsaID,
-				Summary:  node.Summary,
-				Modified: node.PublishedAt,
+				ID:        node.GhsaID,
+				Summary:   node.Summary,
+				Modified:  node.PublishedAt,
+				Published: node.PublishedAt,
 			}
 			for _, vuln := range node.Vulnerabilities.Nodes {
-				// Parse version from "= 2.0.7" format
-				ver := strings.TrimPrefix(vuln.VulnerableVersionRange, "= ")
-				adv.Affected = append(adv.Affected, AffectedPackage{
-					Package:  osvPackage{Ecosystem: ghsaEcosystem(vuln.Package.Ecosystem), Name: vuln.Package.Name},
-					Versions: []string{ver},
-				})
+				pkg := AffectedPackage{
+					Package: osvPackage{Ecosystem: ghsaEcosystem(vuln.Package.Ecosystem), Name: vuln.Package.Name},
+				}
+				vr := strings.TrimSpace(vuln.VulnerableVersionRange)
+				if strings.HasPrefix(vr, "= ") {
+					pkg.Versions = []string{strings.TrimSpace(vr[2:])}
+				} else if vr != "" {
+					pkg.Ranges = []VersionRange{parseGHSARange(vr)}
+				}
+				adv.Affected = append(adv.Affected, pkg)
 			}
 			advisories = append(advisories, adv)
 		}
@@ -274,6 +327,85 @@ func normalizeEcosystem(s string) string {
 	default:
 		return s
 	}
+}
+
+// parseGHSARange converts a GHSA vulnerableVersionRange string into an OSV VersionRange.
+func parseGHSARange(s string) VersionRange {
+	vr := VersionRange{Type: "ECOSYSTEM"}
+	for _, part := range strings.Split(s, ",") {
+		part = strings.TrimSpace(part)
+		switch {
+		case strings.HasPrefix(part, ">= "):
+			vr.Events = append(vr.Events, RangeEvent{Introduced: strings.TrimSpace(part[3:])})
+		case strings.HasPrefix(part, "> "):
+			vr.Events = append(vr.Events, RangeEvent{Introduced: strings.TrimSpace(part[2:])})
+		case strings.HasPrefix(part, "<= "):
+			vr.Events = append(vr.Events, RangeEvent{LastAffected: strings.TrimSpace(part[3:])})
+		case strings.HasPrefix(part, "< "):
+			vr.Events = append(vr.Events, RangeEvent{Fixed: strings.TrimSpace(part[2:])})
+		}
+	}
+	return vr
+}
+
+// formatRanges returns a human-readable string for version ranges.
+func formatRanges(ranges []VersionRange) string {
+	var parts []string
+	for _, r := range ranges {
+		var introduced, upper string
+		for _, e := range r.Events {
+			if e.Introduced != "" {
+				introduced = e.Introduced
+			}
+			if e.Fixed != "" {
+				upper = e.Fixed
+			}
+			if e.LastAffected != "" {
+				upper = e.LastAffected
+			}
+		}
+		switch {
+		case introduced == "0" && upper == "":
+			parts = append(parts, "all versions")
+		case introduced != "" && upper != "":
+			parts = append(parts, ">= "+introduced+", < "+upper)
+		case introduced != "":
+			parts = append(parts, ">= "+introduced)
+		case upper != "":
+			parts = append(parts, "< "+upper)
+		}
+	}
+	return strings.Join(parts, "; ")
+}
+
+// firstLine returns the first meaningful line of s, skipping YAML frontmatter.
+func firstLine(s string) string {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return ""
+	}
+	if strings.HasPrefix(s, "---") {
+		if end := strings.Index(s[3:], "---"); end >= 0 {
+			s = strings.TrimSpace(s[3+end+3:])
+		}
+	}
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		return s[:i]
+	}
+	return s
+}
+
+// advisoryLink returns the best URL for an advisory.
+func advisoryLink(adv Advisory) string {
+	for _, ref := range adv.References {
+		if ref.Type == "ADVISORY" {
+			return ref.URL
+		}
+	}
+	if strings.HasPrefix(adv.ID, "GHSA-") {
+		return "https://github.com/advisories/" + adv.ID
+	}
+	return "https://osv.dev/vulnerability/" + adv.ID
 }
 
 // filterByEcosystem returns entries matching any of the given ecosystems.
@@ -324,11 +456,96 @@ const (
 	colorReset  = "\033[0m"
 )
 
+// extractRawField extracts a top-level field from raw JSON.
+func extractRawField(raw json.RawMessage, field string) (json.RawMessage, bool) {
+	if raw == nil {
+		return nil, false
+	}
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &m); err != nil {
+		return nil, false
+	}
+	val, ok := m[field]
+	if !ok || string(val) == "null" {
+		return nil, false
+	}
+	return val, true
+}
+
+// formatOSVField formats a raw JSON field value for display.
+func formatOSVField(field string, raw json.RawMessage) string {
+	switch field {
+	case "details":
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			return strings.ReplaceAll(s, "\n", " ")
+		}
+	case "aliases", "related":
+		var arr []string
+		if json.Unmarshal(raw, &arr) == nil && len(arr) > 0 {
+			return strings.Join(arr, ", ")
+		}
+	case "severity":
+		var sevs []struct {
+			Type  string `json:"type"`
+			Score string `json:"score"`
+		}
+		if json.Unmarshal(raw, &sevs) == nil && len(sevs) > 0 {
+			parts := make([]string, len(sevs))
+			for i, s := range sevs {
+				parts[i] = s.Type + ": " + s.Score
+			}
+			return strings.Join(parts, ", ")
+		}
+	case "references":
+		var refs []struct {
+			Type string `json:"type"`
+			URL  string `json:"url"`
+		}
+		if json.Unmarshal(raw, &refs) == nil && len(refs) > 0 {
+			lines := make([]string, len(refs))
+			for i, r := range refs {
+				lines[i] = fmt.Sprintf("    %s  %s", r.Type, r.URL)
+			}
+			return "\n" + strings.Join(lines, "\n")
+		}
+	case "credits":
+		var credits []struct {
+			Name string `json:"name"`
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &credits) == nil && len(credits) > 0 {
+			parts := make([]string, len(credits))
+			for i, cr := range credits {
+				if cr.Type != "" {
+					parts[i] = cr.Name + " (" + cr.Type + ")"
+				} else {
+					parts[i] = cr.Name
+				}
+			}
+			return strings.Join(parts, ", ")
+		}
+	case "published", "withdrawn":
+		var s string
+		if json.Unmarshal(raw, &s) == nil {
+			if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+				return t.Format("2006-01-02")
+			}
+			return s
+		}
+	}
+	// Fallback: unquote strings, otherwise compact JSON
+	var s string
+	if json.Unmarshal(raw, &s) == nil {
+		return s
+	}
+	return string(raw)
+}
+
 // renderAdvisory writes a formatted advisory block to w.
-// If plain is true, ANSI codes are omitted.
-func renderAdvisory(w io.Writer, adv Advisory, plain bool) {
+func renderAdvisory(w io.Writer, adv Advisory, rc RenderConfig) {
 	c := func(code, s string) string {
-		if plain {
+		if rc.Plain {
 			return s
 		}
 		return code + s + colorReset
@@ -343,6 +560,9 @@ func renderAdvisory(w io.Writer, adv Advisory, plain bool) {
 		if versions != "" {
 			pkg += "@" + versions
 		}
+		if rangeStr := formatRanges(aff.Ranges); rangeStr != "" {
+			pkg += " (" + rangeStr + ")"
+		}
 
 		fmt.Fprintf(w, "[%s] %s / %s\n",
 			c(colorRed, adv.ID),
@@ -353,16 +573,58 @@ func renderAdvisory(w io.Writer, adv Advisory, plain bool) {
 		fmt.Fprintf(w, "[%s]\n", c(colorRed, adv.ID))
 	}
 
-	if adv.Summary != "" {
-		fmt.Fprintf(w, "  %s\n", adv.Summary)
+	// Default and Full: summary + date/link
+	if rc.Level != InfoShort {
+		summary := adv.Summary
+		if summary == "" {
+			summary = firstLine(adv.Details)
+		}
+		if summary != "" {
+			fmt.Fprintf(w, "  %s\n", summary)
+		}
+
+		date := adv.Modified.Format("2006-01-02")
+		if !adv.Published.IsZero() {
+			date = adv.Published.Format("2006-01-02")
+		}
+		link := advisoryLink(adv)
+		fmt.Fprintf(w, "  %s  %s\n", c(colorDim, date), c(colorDim, link))
 	}
 
-	date := adv.Modified.Format("2006-01-02")
-	link := "https://osv.dev/vulnerability/" + adv.ID
-	if strings.HasPrefix(adv.ID, "GHSA-") {
-		link = "https://github.com/advisories/" + adv.ID
+	// Full: extra struct fields
+	if rc.Level == InfoFull {
+		if adv.Details != "" && adv.Details != adv.Summary {
+			details := strings.ReplaceAll(adv.Details, "\n", " ")
+			fmt.Fprintf(w, "  %s: %s\n", c(colorDim, "details"), details)
+		}
+		if len(adv.Aliases) > 0 {
+			fmt.Fprintf(w, "  %s: %s\n", c(colorDim, "aliases"), strings.Join(adv.Aliases, ", "))
+		}
+		if len(adv.References) > 0 {
+			fmt.Fprintf(w, "  %s:\n", c(colorDim, "references"))
+			for _, ref := range adv.References {
+				fmt.Fprintf(w, "    %s  %s\n", ref.Type, ref.URL)
+			}
+		}
 	}
-	fmt.Fprintf(w, "  %s  %s\n", c(colorDim, date), c(colorDim, link))
+
+	// Extra OSV fields from --osv-field
+	for _, field := range rc.OSVFields {
+		raw, ok := extractRawField(adv.Raw, field)
+		if !ok {
+			continue
+		}
+		rendered := formatOSVField(field, raw)
+		if rendered == "" || rendered == "[]" || rendered == "null" {
+			continue
+		}
+		if strings.HasPrefix(rendered, "\n") {
+			fmt.Fprintf(w, "  %s:%s\n", c(colorDim, field), rendered)
+		} else {
+			fmt.Fprintf(w, "  %s: %s\n", c(colorDim, field), rendered)
+		}
+	}
+
 	fmt.Fprintln(w, "---")
 }
 
@@ -375,6 +637,8 @@ type Config struct {
 	EnableOSV   bool      // poll osv.dev MAL-* feed
 	EnableGHSA  bool      // poll GHSA MALWARE feed
 	Since       time.Time // initial lookback; used when no state file exists
+	InfoLevel   InfoLevel // output detail: InfoShort, InfoDefault, InfoFull
+	OSVFields   []string  // extra OSV JSON fields to display
 	// Overridable endpoints for testing.
 	csvURL       string
 	osvAPIBase   string
@@ -417,19 +681,27 @@ func filterGHSAByEcosystem(advisories []Advisory, ecosystems []string) []Advisor
 	return filtered
 }
 
-// dedup returns advisories that don't overlap with MAL entries by package name+ecosystem.
+// dedup returns advisories that don't overlap with MAL entries by alias or package name+ecosystem.
 func dedup(ghsaAdvs []Advisory, malAdvs []Advisory) []Advisory {
-	seen := make(map[string]bool)
+	seenPkg := make(map[string]bool)
+	seenID := make(map[string]bool)
 	for _, adv := range malAdvs {
+		seenID[adv.ID] = true
+		for _, alias := range adv.Aliases {
+			seenID[alias] = true
+		}
 		for _, aff := range adv.Affected {
-			seen[aff.Package.Ecosystem+"/"+aff.Package.Name] = true
+			seenPkg[aff.Package.Ecosystem+"/"+aff.Package.Name] = true
 		}
 	}
 	var unique []Advisory
 	for _, adv := range ghsaAdvs {
+		if seenID[adv.ID] {
+			continue
+		}
 		dup := false
 		for _, aff := range adv.Affected {
-			if seen[aff.Package.Ecosystem+"/"+aff.Package.Name] {
+			if seenPkg[aff.Package.Ecosystem+"/"+aff.Package.Name] {
 				dup = true
 				break
 			}
@@ -467,6 +739,9 @@ func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
 						log.Printf("[feed] error fetching %s: %v", entry.ID, err)
 						continue
 					}
+					if adv.Withdrawn != nil {
+						continue
+					}
 					malAdvs = append(malAdvs, adv)
 				}
 			}
@@ -491,8 +766,9 @@ func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
 
 		// Render and track newest timestamp
 		newest := lastSeen
+		rc := RenderConfig{Plain: plain, Level: cfg.InfoLevel, OSVFields: cfg.OSVFields}
 		for _, adv := range all {
-			renderAdvisory(w, adv, plain)
+			renderAdvisory(w, adv, rc)
 			if adv.Modified.After(newest) {
 				newest = adv.Modified
 			}

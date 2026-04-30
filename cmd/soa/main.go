@@ -36,6 +36,8 @@ func main() {
 			{Name: "ecosystem", Default: "", Description: "filter by ecosystem (npm,pypi,go,rubygems)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "source", Default: "all", Description: "data sources: all, osv, ghsa (comma-separated)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
 			{Name: "since", Default: "24h", Description: "initial lookback window (e.g. 30m, 4h, 7d, 1M, 1y)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
+			{Name: "info", Default: "default", Description: "output detail level: short, default, full", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
+			{Name: "osv-field", Default: "", Description: "extra OSV fields to include (comma-separated: details,severity,references,aliases,credits,...)", NotForRootCommand: true, SharedSubcommand: quicli.SubcommandSet{"feed"}},
 		},
 		Function: proxyCmd,
 		Subcommands: quicli.Subcommands{
@@ -274,6 +276,31 @@ func feedCmd(cfg_parsed quicli.Config) {
 		fmt.Fprintf(os.Stderr, "[soa] warning: GHSA source selected but GITHUB_TOKEN is not set; GHSA feed will be skipped\n")
 	}
 
+	// Parse --info flag
+	var infoLevel feed.InfoLevel
+	switch strings.ToLower(cfg_parsed.GetStringFlag("info")) {
+	case "short":
+		infoLevel = feed.InfoShort
+	case "default", "":
+		infoLevel = feed.InfoDefault
+	case "full":
+		infoLevel = feed.InfoFull
+	default:
+		fmt.Fprintf(os.Stderr, "[soa] unknown --info level %q (valid: short, default, full)\n", cfg_parsed.GetStringFlag("info"))
+		os.Exit(1)
+	}
+
+	// Parse --osv-field flag
+	var osvFields []string
+	if f := cfg_parsed.GetStringFlag("osv-field"); f != "" {
+		for _, field := range strings.Split(f, ",") {
+			field = strings.TrimSpace(field)
+			if field != "" {
+				osvFields = append(osvFields, field)
+			}
+		}
+	}
+
 	cfg := feed.Config{
 		Interval:    interval,
 		Ecosystems:  ecosystems,
@@ -282,6 +309,8 @@ func feedCmd(cfg_parsed quicli.Config) {
 		EnableOSV:   wantOSV,
 		EnableGHSA:  wantGHSA,
 		Since:       sinceTime,
+		InfoLevel:   infoLevel,
+		OSVFields:   osvFields,
 	}
 
 	var sourceLabel string
