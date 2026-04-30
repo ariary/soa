@@ -15,6 +15,7 @@ import (
 
 const csvURL = "https://osv-vulnerabilities.storage.googleapis.com/modified_id.csv"
 const osvAPIBase = "https://api.osv.dev/v1/vulns/"
+const ghGraphQLURL = "https://api.github.com/graphql"
 const rangeBytes = 51200 // 50KB
 
 // MALEntry is a parsed line from modified_id.csv.
@@ -132,6 +133,133 @@ func fetchAdvisory(ctx context.Context, apiBase string, id string) (Advisory, er
 	return adv, nil
 }
 
+// ghsaQuery is the GraphQL query for fetching recent MALWARE advisories.
+const ghsaQuery = `query($since: DateTime!, $cursor: String) {
+  securityAdvisories(classifications: [MALWARE], first: 50, orderBy: {field: PUBLISHED_AT, direction: DESC}, publishedSince: $since, after: $cursor) {
+    nodes {
+      ghsaId
+      summary
+      publishedAt
+      vulnerabilities(first: 20) {
+        nodes {
+          package { ecosystem name }
+          vulnerableVersionRange
+        }
+      }
+    }
+    pageInfo { hasNextPage endCursor }
+  }
+}`
+
+type ghsaResponse struct {
+	Data struct {
+		SecurityAdvisories struct {
+			Nodes []struct {
+				GhsaID      string    `json:"ghsaId"`
+				Summary     string    `json:"summary"`
+				PublishedAt time.Time `json:"publishedAt"`
+				Vulnerabilities struct {
+					Nodes []struct {
+						Package struct {
+							Ecosystem string `json:"ecosystem"`
+							Name      string `json:"name"`
+						} `json:"package"`
+						VulnerableVersionRange string `json:"vulnerableVersionRange"`
+					} `json:"nodes"`
+				} `json:"vulnerabilities"`
+			} `json:"nodes"`
+			PageInfo struct {
+				HasNextPage bool   `json:"hasNextPage"`
+				EndCursor   string `json:"endCursor"`
+			} `json:"pageInfo"`
+		} `json:"securityAdvisories"`
+	} `json:"data"`
+}
+
+// ghsaEcosystem maps GitHub ecosystem names to osv.dev-style names.
+func ghsaEcosystem(gh string) string {
+	switch gh {
+	case "NPM":
+		return "npm"
+	case "PIP":
+		return "PyPI"
+	case "GO":
+		return "Go"
+	case "RUBYGEMS":
+		return "RubyGems"
+	default:
+		return gh
+	}
+}
+
+// fetchGHSAMalware queries GitHub Advisory Database for MALWARE advisories published after since.
+// Returns them as Advisory structs compatible with the MAL-* output.
+func fetchGHSAMalware(ctx context.Context, token string, graphqlURL string, since time.Time) ([]Advisory, error) {
+	if graphqlURL == "" {
+		graphqlURL = ghGraphQLURL
+	}
+
+	var advisories []Advisory
+	var cursor *string
+
+	for {
+		vars := map[string]interface{}{
+			"since": since.Format(time.RFC3339),
+		}
+		if cursor != nil {
+			vars["cursor"] = *cursor
+		}
+
+		body, _ := json.Marshal(map[string]interface{}{
+			"query":     ghsaQuery,
+			"variables": vars,
+		})
+
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, graphqlURL, bytes.NewReader(body))
+		if err != nil {
+			return nil, err
+		}
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer "+token)
+
+		resp, err := httpClient.Do(req)
+		if err != nil {
+			return nil, err
+		}
+
+		var result ghsaResponse
+		err = json.NewDecoder(resp.Body).Decode(&result)
+		resp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("decoding GHSA response: %w", err)
+		}
+
+		for _, node := range result.Data.SecurityAdvisories.Nodes {
+			adv := Advisory{
+				ID:       node.GhsaID,
+				Summary:  node.Summary,
+				Modified: node.PublishedAt,
+			}
+			for _, vuln := range node.Vulnerabilities.Nodes {
+				// Parse version from "= 2.0.7" format
+				ver := strings.TrimPrefix(vuln.VulnerableVersionRange, "= ")
+				adv.Affected = append(adv.Affected, AffectedPackage{
+					Package:  osvPackage{Ecosystem: ghsaEcosystem(vuln.Package.Ecosystem), Name: vuln.Package.Name},
+					Versions: []string{ver},
+				})
+			}
+			advisories = append(advisories, adv)
+		}
+
+		if !result.Data.SecurityAdvisories.PageInfo.HasNextPage {
+			break
+		}
+		cursor = &result.Data.SecurityAdvisories.PageInfo.EndCursor
+	}
+
+	return advisories, nil
+}
+
 // normalizeEcosystem maps user input to osv.dev ecosystem names.
 func normalizeEcosystem(s string) string {
 	switch strings.ToLower(s) {
@@ -231,18 +359,23 @@ func renderAdvisory(w io.Writer, adv Advisory, plain bool) {
 
 	date := adv.Modified.Format("2006-01-02")
 	link := "https://osv.dev/vulnerability/" + adv.ID
+	if strings.HasPrefix(adv.ID, "GHSA-") {
+		link = "https://github.com/advisories/" + adv.ID
+	}
 	fmt.Fprintf(w, "  %s  %s\n", c(colorDim, date), c(colorDim, link))
 	fmt.Fprintln(w, "---")
 }
 
 // Config holds feed configuration.
 type Config struct {
-	Interval   time.Duration
-	Ecosystems []string
-	StatePath  string
+	Interval    time.Duration
+	Ecosystems  []string
+	StatePath   string
+	GithubToken string // optional; enables GHSA MALWARE feed
 	// Overridable endpoints for testing.
-	csvURL     string
-	osvAPIBase string
+	csvURL       string
+	osvAPIBase   string
+	ghGraphqlURL string
 }
 
 func (c Config) getCSVURL() string {
@@ -259,6 +392,52 @@ func (c Config) getOSVAPIBase() string {
 	return osvAPIBase
 }
 
+// filterGHSAByEcosystem filters GHSA advisories by ecosystem.
+// If ecosystems is empty, all advisories are returned.
+func filterGHSAByEcosystem(advisories []Advisory, ecosystems []string) []Advisory {
+	if len(ecosystems) == 0 {
+		return advisories
+	}
+	allowed := make(map[string]bool, len(ecosystems))
+	for _, e := range ecosystems {
+		allowed[normalizeEcosystem(e)] = true
+	}
+	var filtered []Advisory
+	for _, adv := range advisories {
+		for _, aff := range adv.Affected {
+			if allowed[aff.Package.Ecosystem] {
+				filtered = append(filtered, adv)
+				break
+			}
+		}
+	}
+	return filtered
+}
+
+// dedup returns advisories that don't overlap with MAL entries by package name+ecosystem.
+func dedup(ghsaAdvs []Advisory, malAdvs []Advisory) []Advisory {
+	seen := make(map[string]bool)
+	for _, adv := range malAdvs {
+		for _, aff := range adv.Affected {
+			seen[aff.Package.Ecosystem+"/"+aff.Package.Name] = true
+		}
+	}
+	var unique []Advisory
+	for _, adv := range ghsaAdvs {
+		dup := false
+		for _, aff := range adv.Affected {
+			if seen[aff.Package.Ecosystem+"/"+aff.Package.Name] {
+				dup = true
+				break
+			}
+		}
+		if !dup {
+			unique = append(unique, adv)
+		}
+	}
+	return unique
+}
+
 // Run starts the feed poll loop. It performs one poll immediately, then
 // repeats every cfg.Interval. It blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
@@ -268,28 +447,46 @@ func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
 	}
 
 	poll := func() {
+		// Source 1: osv.dev MAL-*
+		var malAdvs []Advisory
 		entries, err := fetchRecentMALIDs(ctx, cfg.getCSVURL(), lastSeen)
 		if err != nil {
 			log.Printf("[feed] error fetching CSV: %v", err)
-			return
-		}
-
-		entries = filterByEcosystem(entries, cfg.Ecosystems)
-		if len(entries) == 0 {
-			return
-		}
-
-		// Track the newest timestamp from this batch
-		newest := lastSeen
-		for _, entry := range entries {
-			adv, err := fetchAdvisory(ctx, cfg.getOSVAPIBase(), entry.ID)
-			if err != nil {
-				log.Printf("[feed] error fetching %s: %v", entry.ID, err)
-				continue
+		} else {
+			entries = filterByEcosystem(entries, cfg.Ecosystems)
+			for _, entry := range entries {
+				adv, err := fetchAdvisory(ctx, cfg.getOSVAPIBase(), entry.ID)
+				if err != nil {
+					log.Printf("[feed] error fetching %s: %v", entry.ID, err)
+					continue
+				}
+				malAdvs = append(malAdvs, adv)
 			}
+		}
+
+		// Source 2: GHSA MALWARE (optional, needs token)
+		var ghsaAdvs []Advisory
+		if cfg.GithubToken != "" {
+			ghsa, err := fetchGHSAMalware(ctx, cfg.GithubToken, cfg.ghGraphqlURL, lastSeen)
+			if err != nil {
+				log.Printf("[feed] error fetching GHSA: %v", err)
+			} else {
+				ghsaAdvs = filterGHSAByEcosystem(ghsa, cfg.Ecosystems)
+				ghsaAdvs = dedup(ghsaAdvs, malAdvs)
+			}
+		}
+
+		all := append(malAdvs, ghsaAdvs...)
+		if len(all) == 0 {
+			return
+		}
+
+		// Render and track newest timestamp
+		newest := lastSeen
+		for _, adv := range all {
 			renderAdvisory(w, adv, plain)
-			if entry.Modified.After(newest) {
-				newest = entry.Modified
+			if adv.Modified.After(newest) {
+				newest = adv.Modified
 			}
 		}
 

@@ -155,13 +155,28 @@ func feedCmd(cfg_parsed quicli.Config) {
 
 	isTTY := term.IsTerminal(int(os.Stderr.Fd()))
 
-	cfg := feed.Config{
-		Interval:   interval,
-		Ecosystems: ecosystems,
-		StatePath:  statePath,
+	// Resolve GitHub token for GHSA feed (optional)
+	appCfg := config.Load()
+	githubToken := ""
+	if appCfg.Server.Rules.Analysis.GitHubTokenEnv != "" {
+		githubToken = os.Getenv(appCfg.Server.Rules.Analysis.GitHubTokenEnv)
+	}
+	if githubToken == "" {
+		githubToken = os.Getenv("GITHUB_TOKEN")
 	}
 
-	fmt.Fprintf(os.Stderr, "[soa] feed started (polling every %s)\n", interval)
+	cfg := feed.Config{
+		Interval:    interval,
+		Ecosystems:  ecosystems,
+		StatePath:   statePath,
+		GithubToken: githubToken,
+	}
+
+	sources := "osv.dev"
+	if githubToken != "" {
+		sources += " + GHSA"
+	}
+	fmt.Fprintf(os.Stderr, "[soa] feed started (polling every %s, sources: %s)\n", interval, sources)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
