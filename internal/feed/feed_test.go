@@ -107,3 +107,50 @@ func TestFetchAdvisory(t *testing.T) {
 		t.Errorf("unexpected affected: %+v", adv.Affected)
 	}
 }
+
+func TestNormalizeEcosystem(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"npm", "npm"},
+		{"NPM", "npm"},
+		{"pypi", "PyPI"},
+		{"pip", "PyPI"},
+		{"go", "Go"},
+		{"golang", "Go"},
+		{"rubygems", "RubyGems"},
+		{"gem", "RubyGems"},
+		{"unknown", "unknown"},
+	}
+	for _, tt := range tests {
+		got := normalizeEcosystem(tt.input)
+		if got != tt.want {
+			t.Errorf("normalizeEcosystem(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestFilterByEcosystem(t *testing.T) {
+	entries := []MALEntry{
+		{ID: "MAL-1", Ecosystem: "npm"},
+		{ID: "MAL-2", Ecosystem: "PyPI"},
+		{ID: "MAL-3", Ecosystem: "npm"},
+		{ID: "MAL-4", Ecosystem: "Go"},
+	}
+
+	filtered := filterByEcosystem(entries, []string{"npm"})
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2, got %d", len(filtered))
+	}
+
+	filtered = filterByEcosystem(entries, []string{"pypi", "go"})
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2, got %d", len(filtered))
+	}
+
+	filtered = filterByEcosystem(entries, nil)
+	if len(filtered) != 4 {
+		t.Fatalf("expected 4 (no filter), got %d", len(filtered))
+	}
+}

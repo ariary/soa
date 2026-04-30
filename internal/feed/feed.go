@@ -129,3 +129,38 @@ func fetchAdvisory(ctx context.Context, apiBase string, id string) (Advisory, er
 	}
 	return adv, nil
 }
+
+// normalizeEcosystem maps user input to osv.dev ecosystem names.
+func normalizeEcosystem(s string) string {
+	switch strings.ToLower(s) {
+	case "npm":
+		return "npm"
+	case "pypi", "pip":
+		return "PyPI"
+	case "go", "golang":
+		return "Go"
+	case "rubygems", "gem":
+		return "RubyGems"
+	default:
+		return s
+	}
+}
+
+// filterByEcosystem returns entries matching any of the given ecosystems.
+// If ecosystems is empty, all entries are returned.
+func filterByEcosystem(entries []MALEntry, ecosystems []string) []MALEntry {
+	if len(ecosystems) == 0 {
+		return entries
+	}
+	allowed := make(map[string]bool, len(ecosystems))
+	for _, e := range ecosystems {
+		allowed[normalizeEcosystem(e)] = true
+	}
+	var filtered []MALEntry
+	for _, entry := range entries {
+		if allowed[entry.Ecosystem] {
+			filtered = append(filtered, entry)
+		}
+	}
+	return filtered
+}
