@@ -239,3 +239,58 @@ func TestRenderAdvisory_MultipleAffected(t *testing.T) {
 		t.Error("should render all affected packages")
 	}
 }
+
+func TestRun_SinglePoll(t *testing.T) {
+	csvData := `2026-04-30T15:37:33.526586Z,npm/MAL-2025-49286
+2026-04-30T15:32:51.46441Z,npm/MAL-2026-3199
+2026-04-30T14:00:00Z,PyPI/GHSA-other
+`
+	advisory1 := `{"id":"MAL-2025-49286","summary":"Worm","modified":"2026-04-30T15:37:33Z","affected":[{"package":{"ecosystem":"npm","name":"gunpowder-ghost"},"versions":["1.0.0"]}]}`
+	advisory2 := `{"id":"MAL-2026-3199","summary":"Bad pkg","modified":"2026-04-30T15:32:51Z","affected":[{"package":{"ecosystem":"npm","name":"blackbeards-navigator"},"versions":["2.0.0"]}]}`
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/csv", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(csvData))
+	})
+	mux.HandleFunc("/MAL-2025-49286", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(advisory1))
+	})
+	mux.HandleFunc("/MAL-2026-3199", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(advisory2))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	statePath := t.TempDir() + "/state.json"
+	var buf bytes.Buffer
+
+	cfg := Config{
+		Interval:   0, // single poll
+		Ecosystems: nil,
+		StatePath:  statePath,
+		csvURL:     srv.URL + "/csv",
+		osvAPIBase: srv.URL + "/",
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	err := Run(ctx, cfg, &buf, true)
+	if err != nil && err != context.Canceled {
+		t.Fatal(err)
+	}
+
+	out := buf.String()
+	if !strings.Contains(out, "MAL-2025-49286") {
+		t.Error("missing MAL-2025-49286 in output")
+	}
+	if !strings.Contains(out, "MAL-2026-3199") {
+		t.Error("missing MAL-2026-3199 in output")
+	}
+
+	// State should be persisted
+	ts := loadState(statePath)
+	if ts.IsZero() {
+		t.Error("expected state to be saved")
+	}
+}

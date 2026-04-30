@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -232,4 +233,87 @@ func renderAdvisory(w io.Writer, adv Advisory, plain bool) {
 	link := "https://osv.dev/vulnerability/" + adv.ID
 	fmt.Fprintf(w, "  %s  %s\n", c(colorDim, date), c(colorDim, link))
 	fmt.Fprintln(w, "---")
+}
+
+// Config holds feed configuration.
+type Config struct {
+	Interval   time.Duration
+	Ecosystems []string
+	StatePath  string
+	// Overridable endpoints for testing.
+	csvURL     string
+	osvAPIBase string
+}
+
+func (c Config) getCSVURL() string {
+	if c.csvURL != "" {
+		return c.csvURL
+	}
+	return csvURL
+}
+
+func (c Config) getOSVAPIBase() string {
+	if c.osvAPIBase != "" {
+		return c.osvAPIBase
+	}
+	return osvAPIBase
+}
+
+// Run starts the feed poll loop. It performs one poll immediately, then
+// repeats every cfg.Interval. It blocks until ctx is cancelled.
+func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
+	lastSeen := loadState(cfg.StatePath)
+	if lastSeen.IsZero() {
+		lastSeen = time.Now().Add(-24 * time.Hour)
+	}
+
+	poll := func() {
+		entries, err := fetchRecentMALIDs(ctx, cfg.getCSVURL(), lastSeen)
+		if err != nil {
+			log.Printf("[feed] error fetching CSV: %v", err)
+			return
+		}
+
+		entries = filterByEcosystem(entries, cfg.Ecosystems)
+		if len(entries) == 0 {
+			return
+		}
+
+		// Track the newest timestamp from this batch
+		newest := lastSeen
+		for _, entry := range entries {
+			adv, err := fetchAdvisory(ctx, cfg.getOSVAPIBase(), entry.ID)
+			if err != nil {
+				log.Printf("[feed] error fetching %s: %v", entry.ID, err)
+				continue
+			}
+			renderAdvisory(w, adv, plain)
+			if entry.Modified.After(newest) {
+				newest = entry.Modified
+			}
+		}
+
+		if newest.After(lastSeen) {
+			lastSeen = newest
+			saveState(cfg.StatePath, lastSeen)
+		}
+	}
+
+	// First poll immediately
+	poll()
+
+	if cfg.Interval <= 0 {
+		return ctx.Err()
+	}
+
+	ticker := time.NewTicker(cfg.Interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			poll()
+		}
+	}
 }
