@@ -2,6 +2,8 @@ github.com/ariary/go-utils v1.0.16 h1:kNyr1uGbog9aqBS8Uth1AZSfeNR4Hgv1O8UXDpnomf
 github.com/ariary/go-utils v1.0.16/go.mod h1:3gpTQLFaOsiZkHnCOAadPiY75nnETNYG7vOq5/o9vRk=
 github.com/ariary/quicli v1.6.0 h1:E8Aq1eOPWStG4GFfgNXyXwjph/XfA8FjB87Z6wwXIiw=
 github.com/ariary/quicli v1.6.0/go.mod h1:OVxZhF0uABiZ34C/XssxVNdadl4rBpH985XyULOf2Mc=
+github.com/ariary/quicli v1.6.1 h1:W6XWs0vlSsij4Tbkb/gJ/SuSJQ+2tkZwS9FI3qd4380=
+github.com/ariary/quicli v1.6.1/go.mod h1:OVxZhF0uABiZ34C/XssxVNdadl4rBpH985XyULOf2Mc=
 golang.org/x/sys v0.43.0 h1:Rlag2XtaFTxp19wS8MXlJwTvoh8ArU6ezoyFsMyCTNI=
 golang.org/x/sys v0.43.0/go.mod h1:4GL1E5IUh+htKOUEOaiffhrAeqysfVGipDYzABqnCmw=
 golang.org/x/term v0.42.0 h1:UiKe+zDFmJobeJ5ggPwOshJIVt6/Ft0rcfrXZDLWAWY=

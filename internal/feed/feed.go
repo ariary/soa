@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -32,7 +33,9 @@ type RenderConfig struct {
 const csvURL = "https://osv-vulnerabilities.storage.googleapis.com/modified_id.csv"
 const osvAPIBase = "https://api.osv.dev/v1/vulns/"
 const ghGraphQLURL = "https://api.github.com/graphql"
-const rangeBytes = 51200 // 50KB
+const defaultRangeBytes = 51200         // 50KB — covers ~5 hours at current CSV density
+const maxRangeBytes = 10 * 1024 * 1024  // 10MB cap
+const fetchWorkers = 20                 // concurrent osv.dev API requests
 
 // MALEntry is a parsed line from modified_id.csv.
 type MALEntry struct {
@@ -126,13 +129,33 @@ type osvPackage struct {
 
 var httpClient = &http.Client{Timeout: 30 * time.Second}
 
-// fetchRecentMALIDs fetches the first rangeBytes of csvURL and returns MAL entries newer than since.
+// rangeBytesForWindow returns how many bytes of the CSV to fetch based on
+// the lookback duration. The CSV has ~200 lines/hour at ~55 bytes/line.
+// We add a 2x margin to account for bursts.
+func rangeBytesForWindow(since time.Time) int {
+	hours := time.Since(since).Hours()
+	if hours < 1 {
+		hours = 1
+	}
+	n := int(hours * 200 * 55 * 2)
+	if n < defaultRangeBytes {
+		return defaultRangeBytes
+	}
+	if n > maxRangeBytes {
+		return maxRangeBytes
+	}
+	return n
+}
+
+// fetchRecentMALIDs fetches the CSV and returns MAL entries newer than since.
+// The byte range scales with the lookback window.
 func fetchRecentMALIDs(ctx context.Context, csvEndpoint string, since time.Time) ([]MALEntry, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, csvEndpoint, nil)
 	if err != nil {
 		return nil, err
 	}
-	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", rangeBytes-1))
+	rb := rangeBytesForWindow(since)
+	req.Header.Set("Range", fmt.Sprintf("bytes=0-%d", rb-1))
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
@@ -713,6 +736,44 @@ func dedup(ghsaAdvs []Advisory, malAdvs []Advisory) []Advisory {
 	return unique
 }
 
+// fetchAdvisories fetches full advisory details for the given MAL entries
+// concurrently with bounded parallelism. Order is preserved.
+func fetchAdvisories(ctx context.Context, apiBase string, entries []MALEntry) []Advisory {
+	type result struct {
+		adv Advisory
+		err error
+	}
+	results := make([]result, len(entries))
+	var wg sync.WaitGroup
+	sem := make(chan struct{}, fetchWorkers)
+	for i, entry := range entries {
+		wg.Add(1)
+		go func(i int, id string) {
+			defer wg.Done()
+			sem <- struct{}{}
+			defer func() { <-sem }()
+			adv, err := fetchAdvisory(ctx, apiBase, id)
+			results[i] = result{adv, err}
+		}(i, entry.ID)
+	}
+	wg.Wait()
+
+	var advs []Advisory
+	for _, r := range results {
+		if r.err != nil {
+			if ctx.Err() == nil {
+				log.Printf("[feed] error fetching advisory: %v", r.err)
+			}
+			continue
+		}
+		if r.adv.Withdrawn != nil {
+			continue
+		}
+		advs = append(advs, r.adv)
+	}
+	return advs
+}
+
 // Run starts the feed poll loop. It performs one poll immediately, then
 // repeats every cfg.Interval. It blocks until ctx is cancelled.
 func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
@@ -733,17 +794,10 @@ func Run(ctx context.Context, cfg Config, w io.Writer, plain bool) error {
 				log.Printf("[feed] error fetching CSV: %v", err)
 			} else {
 				entries = filterByEcosystem(entries, cfg.Ecosystems)
-				for _, entry := range entries {
-					adv, err := fetchAdvisory(ctx, cfg.getOSVAPIBase(), entry.ID)
-					if err != nil {
-						log.Printf("[feed] error fetching %s: %v", entry.ID, err)
-						continue
-					}
-					if adv.Withdrawn != nil {
-						continue
-					}
-					malAdvs = append(malAdvs, adv)
+				if len(entries) > 0 {
+					log.Printf("[feed] fetching %d MAL advisories...", len(entries))
 				}
+				malAdvs = fetchAdvisories(ctx, cfg.getOSVAPIBase(), entries)
 			}
 		}
 
