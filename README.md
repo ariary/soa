@@ -184,8 +184,8 @@ All packages are blocked. `soa` fails closed. No free passes.
 **Does this slow things down?**
 Only source archive downloads go through the check. Metadata requests flow straight through. If the package is in the approved cache, the check is instant.
 
-**what is the added-value of tonga `feed`?**
-using `soa`+`tonga serve` protects you at the *moment of import*, tonga feed protects you for the entire duration the code sits in your environment (help fetectibg malicious dep for the ones already in aporoved cache). It’s the difference between checking an ID at the door and having a system that flags if that person’s "clearance" is revoked later.
+**what is the added-value of `tonga feed`?**
+using `soa`+`tonga serve` protects you at the *moment of import*, tonga feed protects you for the entire duration the code sits in your environment (help detecting malicious dep for the ones already in approved cache). It’s the difference between checking an ID at the door and having a system that flags if that person’s "clearance" is revoked later.
 
 
 **Can I use my own check server?**
