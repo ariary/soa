@@ -48,19 +48,19 @@ soa ./scripts/deps.sh   # anything that pulls packages
 
 ## Supported ecosystems
 
-| Ecosystem | Env var hijacked | Detection |
-|---|---|---|
-| Go | `GOPROXY` | `go.mod` in working directory |
-| npm | `npm_config_registry` | `package.json` in working directory |
-| pip | `PIP_INDEX_URL` | `requirements.txt` or `setup.py` in working directory |
-| RubyGems | `GEM_HOST` | `Gemfile` in working directory |
+| Ecosystem | Env var hijacked |
+|---|---|
+| Go | `GOPROXY` |
+| npm | `npm_config_registry` |
+| pip | `PIP_INDEX_URL` |
+| RubyGems | `GEM_HOST` |
 
-Each ecosystem is a `Manager`, a single interface implementation. Adding one is straightforward.
-
-Disable an ecosystem for a single run:
+All ecosystems are active by default. Disable one for a single run:
 ```bash
 soa --go=false npm install   # only intercept npm, leave Go alone
 ```
+
+Each ecosystem is a `Manager`, a single interface implementation. Adding one is straightforward.
 
 ## Get it
 
@@ -68,6 +68,8 @@ soa --go=false npm install   # only intercept npm, leave Go alone
 go install github.com/ariary/soa/cmd/soa@latest
 go install github.com/ariary/soa/cmd/tonga@latest
 ```
+
+> Requires **Go 1.25.5+**. See [docs/install.md](docs/install.md) for PATH setup, remote tonga, team deployment, and more.
 
 ## Under the hood
 
